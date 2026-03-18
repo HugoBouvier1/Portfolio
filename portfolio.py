@@ -2733,18 +2733,22 @@ if page == "Portfolio Overview":
 
     # Custom date range selector
     st.sidebar.markdown("**Custom Range:**")
-    date_range = st.sidebar.date_input(
+    
+    def on_date_change():
+        """Callback to update session state when user manually changes dates."""
+        dr = st.session_state.date_range_input
+        if isinstance(dr, (list, tuple)) and len(dr) == 2:
+            st.session_state.start_date = datetime.combine(dr[0], datetime.min.time())
+            st.session_state.end_date = datetime.combine(dr[1], datetime.min.time())
+    
+    st.sidebar.date_input(
         "",
-        value=(st.session_state.start_date, st.session_state.end_date),
+        value=(st.session_state.start_date.date(), st.session_state.end_date.date()),
         max_value=datetime.now(),
         label_visibility="collapsed",
-        key="date_range_input"
+        key="date_range_input",
+        on_change=on_date_change
     )
-
-    # Update session state if user manually changed dates
-    if len(date_range) == 2:
-        st.session_state.start_date = datetime.combine(date_range[0], datetime.min.time())
-        st.session_state.end_date = datetime.combine(date_range[1], datetime.min.time())
 
     # Show selected range
     days_selected = (st.session_state.end_date - st.session_state.start_date).days
