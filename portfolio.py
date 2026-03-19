@@ -3090,11 +3090,54 @@ if page == "Market Overview":
         """
         Download ALL tickers in a SINGLE yf.download call.
         Returns dict: ticker -> Series of Close prices.
+        For 1D (period_days=0), fetches intraday data and prepends previous close
+        so percentage change is calculated from previous close (like Google/Yahoo).
         """
-        start = datetime.now() - timedelta(days=period_days + 10)
         result = {}
         try:
-            df = yf.download(tickers_list, start=start, end=datetime.now(), progress=False, group_by='ticker')
+            if period_days == 0:
+                # First get previous close from daily data (last 5 days to be safe)
+                df_daily = yf.download(tickers_list, period="5d", progress=False, group_by='ticker')
+                # Then get intraday data for the chart
+                df_intraday = yf.download(tickers_list, period="1d", interval="5m", progress=False, group_by='ticker')
+                
+                for tkr in tickers_list:
+                    try:
+                        # Extract daily close to get previous close
+                        if len(tickers_list) == 1:
+                            daily_close = df_daily['Close']
+                            intra_close = df_intraday['Close'] if not df_intraday.empty else None
+                        else:
+                            daily_close = df_daily[tkr]['Close'] if tkr in df_daily.columns.get_level_values(0) else None
+                            intra_close = df_intraday[tkr]['Close'] if not df_intraday.empty and tkr in df_intraday.columns.get_level_values(0) else None
+                        
+                        if daily_close is not None:
+                            if isinstance(daily_close, pd.DataFrame):
+                                daily_close = daily_close.iloc[:, 0]
+                            daily_close = daily_close.dropna()
+                        
+                        if intra_close is not None:
+                            if isinstance(intra_close, pd.DataFrame):
+                                intra_close = intra_close.iloc[:, 0]
+                            intra_close = intra_close.dropna()
+                        
+                        if daily_close is not None and len(daily_close) >= 2 and intra_close is not None and len(intra_close) >= 1:
+                            # Previous close = second to last daily close
+                            prev_close = daily_close.iloc[-2]
+                            # Build series: previous close + today's intraday data
+                            prev_series = pd.Series([prev_close], index=[intra_close.index[0] - pd.Timedelta(minutes=5)])
+                            combined = pd.concat([prev_series, intra_close])
+                            result[tkr] = combined
+                        elif daily_close is not None and len(daily_close) >= 2:
+                            # Fallback: use last 2 daily closes
+                            result[tkr] = daily_close.iloc[-2:]
+                    except Exception:
+                        continue
+                return result
+            else:
+                start = datetime.now() - timedelta(days=period_days + 10)
+                df = yf.download(tickers_list, start=start, end=datetime.now(), progress=False, group_by='ticker')
+            
             if df.empty:
                 return result
             for tkr in tickers_list:
@@ -3179,11 +3222,11 @@ if page == "Market Overview":
     st.sidebar.markdown("---")
     st.sidebar.subheader("⚙️ Market Overview Settings")
     mo_period_label = st.sidebar.selectbox(
-        "Performance period", ["1W", "1M", "3M", "6M", "1Y", "YTD"],
-        index=1, key="mo_perf_period"
+        "Performance period", ["1D", "1W", "1M", "3M", "6M", "1Y", "YTD", "3Y", "5Y"],
+        index=0, key="mo_perf_period"
     )
     period_days_map = {
-        "1W": 7, "1M": 30, "3M": 90, "6M": 180, "1Y": 365,
+        "1D": 0, "1W": 7, "1M": 30, "3M": 90, "6M": 180, "1Y": 365, "3Y": 1095, "5Y": 1825,
         "YTD": (datetime.now() - datetime(datetime.now().year, 1, 1)).days,
     }
     mo_period_days = period_days_map[mo_period_label]
