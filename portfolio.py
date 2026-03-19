@@ -3090,11 +3090,48 @@ if page == "Market Overview":
         """
         Download ALL tickers in a SINGLE yf.download call.
         Returns dict: ticker -> Series of Close prices.
+        For 1D (period_days=0), fetches intraday data and prepends previous close
+        so percentage change is calculated from previous close (like Google/Yahoo).
         """
-        start = datetime.now() - timedelta(days=period_days + 10)
         result = {}
         try:
-            df = yf.download(tickers_list, start=start, end=datetime.now(), progress=False, group_by='ticker')
+            if period_days == 0:
+                df_daily = yf.download(tickers_list, period="5d", progress=False, group_by='ticker')
+                df_intraday = yf.download(tickers_list, period="1d", interval="5m", progress=False, group_by='ticker')
+                
+                for tkr in tickers_list:
+                    try:
+                        if len(tickers_list) == 1:
+                            daily_close = df_daily['Close']
+                            intra_close = df_intraday['Close'] if not df_intraday.empty else None
+                        else:
+                            daily_close = df_daily[tkr]['Close'] if tkr in df_daily.columns.get_level_values(0) else None
+                            intra_close = df_intraday[tkr]['Close'] if not df_intraday.empty and tkr in df_intraday.columns.get_level_values(0) else None
+                        
+                        if daily_close is not None:
+                            if isinstance(daily_close, pd.DataFrame):
+                                daily_close = daily_close.iloc[:, 0]
+                            daily_close = daily_close.dropna()
+                        
+                        if intra_close is not None:
+                            if isinstance(intra_close, pd.DataFrame):
+                                intra_close = intra_close.iloc[:, 0]
+                            intra_close = intra_close.dropna()
+                        
+                        if daily_close is not None and len(daily_close) >= 2 and intra_close is not None and len(intra_close) >= 1:
+                            prev_close = daily_close.iloc[-2]
+                            prev_series = pd.Series([prev_close], index=[intra_close.index[0] - pd.Timedelta(minutes=5)])
+                            combined = pd.concat([prev_series, intra_close])
+                            result[tkr] = combined
+                        elif daily_close is not None and len(daily_close) >= 2:
+                            result[tkr] = daily_close.iloc[-2:]
+                    except Exception:
+                        continue
+                return result
+            else:
+                start = datetime.now() - timedelta(days=period_days + 10)
+                df = yf.download(tickers_list, start=start, end=datetime.now(), progress=False, group_by='ticker')
+            
             if df.empty:
                 return result
             for tkr in tickers_list:
