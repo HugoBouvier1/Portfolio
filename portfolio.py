@@ -2692,27 +2692,31 @@ if page == "Portfolio Overview":
         st.session_state.last_market_category = selected_category
 
     # UNIFIED TICKER INPUT: type any ticker and press Enter to add it instantly
-    custom_ticker_input = st.sidebar.text_input(
-        "➕ Add ticker(s)",
-        placeholder="Type ticker and press Enter (e.g. NFLX, DIS)",
-        help="Type any ticker symbol and press Enter. It will be added to the selection automatically. Separate multiple tickers with commas.",
-        key="custom_ticker_input"
-    )
-
-    if custom_ticker_input:
-        import re
-        new_tickers = re.split(r'[,;\s]+', custom_ticker_input.strip())
-        new_tickers = [t.upper().strip() for t in new_tickers if t.strip()]
-    
-        if new_tickers:
+    def _on_ticker_add():
+        """Callback to process new tickers when Enter is pressed."""
+        val = st.session_state.get('custom_ticker_input', '').strip()
+        if val:
+            import re
+            new_tickers = re.split(r'[,;\s]+', val)
+            new_tickers = [t.upper().strip() for t in new_tickers if t.strip()]
             for ticker in new_tickers:
                 if ticker not in st.session_state.custom_tickers_list:
                     st.session_state.custom_tickers_list.append(ticker)
-                    if ticker not in all_available_tickers:
-                        all_available_tickers.append(ticker)
-                if ticker not in st.session_state.market_selected_tickers:
+                if st.session_state.market_selected_tickers is not None and ticker not in st.session_state.market_selected_tickers:
                     st.session_state.market_selected_tickers.append(ticker)
-            st.rerun()
+            # Clear the input after processing
+            st.session_state.custom_ticker_input = ""
+    
+    st.sidebar.text_input(
+        "➕ Add ticker(s)",
+        placeholder="Type ticker and press Enter (e.g. NFLX, DIS)",
+        help="Type any ticker symbol and press Enter. It will be added to the selection automatically. Separate multiple tickers with commas.",
+        key="custom_ticker_input",
+        on_change=_on_ticker_add
+    )
+
+    # Rebuild all_available after potential callback additions
+    all_available_tickers = available_tickers + [t for t in st.session_state.custom_tickers_list if t not in available_tickers]
 
     # Multiselect shows all tickers (predefined + custom) with current selection
     selected_tickers = st.sidebar.multiselect(
