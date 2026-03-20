@@ -1064,27 +1064,12 @@ def calculate_benchmark_performance(benchmark_def, prices_df):
 
 def generate_pdf_report(portfolio_data, output_path):
     """
-    Generate professional PDF report with bar charts, sector/geographic allocation.
-    
-    Args:
-        portfolio_data: Dict with all portfolio information including:
-            - start_date, end_date
-            - current_value, total_return, annual_return
-            - sharpe_ratio, max_drawdown, volatility
-            - holdings (DataFrame)
-            - portfolio_value_series (Series) - for chart
-            - attribution_data (list) - performance attribution
-            - transactions (list) - transaction history
-            - sector_exposure (DataFrame) - optional
-            - geographic_exposure (DataFrame) - optional
-    Returns:
-        True if successful
+    Generate professional PDF report with matplotlib charts (no kaleido dependency).
     """
     if not REPORTLAB_AVAILABLE:
         return False
         
     try:
-        # Import reportlab components
         from reportlab.lib import colors as pdf_colors
         from reportlab.lib.pagesizes import letter
         from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, PageBreak, Image
@@ -1092,546 +1077,421 @@ def generate_pdf_report(portfolio_data, output_path):
         from reportlab.lib.units import inch
         from reportlab.lib.enums import TA_CENTER, TA_RIGHT, TA_LEFT
         
-        # Check if kaleido/plotly available for charts
-        KALEIDO_AVAILABLE = False
-        try:
-            import plotly.graph_objects as go
-            import kaleido
-            # Test that kaleido actually works (not just importable)
-            test_fig = go.Figure(data=[go.Bar(x=[1], y=[1])])
-            import tempfile
-            with tempfile.NamedTemporaryFile(suffix='.png', delete=True) as tmp:
-                test_fig.write_image(tmp.name, engine="kaleido", width=100, height=100)
-            KALEIDO_AVAILABLE = True
-        except Exception as e:
-            KALEIDO_AVAILABLE = False
-            print(f"⚠️  Kaleido not available - charts will be skipped in PDF: {e}")
+        import matplotlib
+        matplotlib.use('Agg')
+        import matplotlib.pyplot as plt
+        import matplotlib.dates as mdates
+        import matplotlib.ticker as mticker
+        CHARTS_AVAILABLE = True
+        
+        # Colors
+        DEEP_BLUE = '#003d5b'
+        ACCENT_BLUE = '#0077b6'
+        LIGHT_BG = '#f0f4f8'
+        LIGHT_GRAY = '#f8f9fa'
+        GRID_COLOR = '#dee2e6'
+        GREEN = '#2e7d32'
+        RED = '#c62828'
         
         # Ensure output directory exists
-        output_path = Path(output_path)
-        output_path.parent.mkdir(parents=True, exist_ok=True)
+        from pathlib import Path as PPath
+        PPath(output_path).parent.mkdir(parents=True, exist_ok=True)
         
         doc = SimpleDocTemplate(
             str(output_path), 
             pagesize=letter,
-            topMargin=0.75*inch, 
-            bottomMargin=0.75*inch,
-            leftMargin=0.75*inch, 
-            rightMargin=0.75*inch
+            topMargin=0.6*inch, 
+            bottomMargin=0.6*inch,
+            leftMargin=0.7*inch, 
+            rightMargin=0.7*inch
         )
         
         story = []
-        _temp_files = []  # Track temp files for cleanup after PDF build
+        _temp_files = []
         styles = getSampleStyleSheet()
         
-        # =====================================================================
-        # CUSTOM STYLES
-        # =====================================================================
-        title_style = ParagraphStyle(
-            'CustomTitle',
-            parent=styles['Heading1'],
-            fontSize=28,
-            textColor=pdf_colors.HexColor('#003d5b'),  # Deep blue
-            spaceAfter=8,
-            alignment=TA_CENTER,
-            fontName='Helvetica-Bold'
-        )
+        # Custom styles
+        title_style = ParagraphStyle('CustomTitle', parent=styles['Heading1'],
+            fontSize=26, textColor=pdf_colors.HexColor(DEEP_BLUE), spaceAfter=4,
+            alignment=TA_CENTER, fontName='Helvetica-Bold')
         
-        subtitle_style = ParagraphStyle(
-            'Subtitle',
-            parent=styles['Normal'],
-            fontSize=12,
-            textColor=pdf_colors.HexColor('#0077b6'),  # Bright blue accent
-            spaceAfter=12,
-            alignment=TA_CENTER,
-            fontName='Helvetica-Oblique'
-        )
+        subtitle_style = ParagraphStyle('Subtitle', parent=styles['Normal'],
+            fontSize=11, textColor=pdf_colors.HexColor(ACCENT_BLUE), spaceAfter=8,
+            alignment=TA_CENTER, fontName='Helvetica-Oblique')
         
-        heading_style = ParagraphStyle(
-            'CustomHeading',
-            parent=styles['Heading2'],
-            fontSize=16,
-            textColor=pdf_colors.HexColor('#003d5b'),  # Deep blue
-            spaceAfter=10,
-            spaceBefore=12,
-            fontName='Helvetica-Bold',
-            borderColor=pdf_colors.HexColor('#003d5b'),  # Deep blue border
-            borderWidth=2,
-            borderPadding=8,
-            backColor=pdf_colors.HexColor('#f0f4f8')  # Very light blue background
-        )
+        heading_style = ParagraphStyle('CustomHeading', parent=styles['Heading2'],
+            fontSize=14, textColor=pdf_colors.HexColor(DEEP_BLUE), spaceAfter=8,
+            spaceBefore=10, fontName='Helvetica-Bold',
+            borderColor=pdf_colors.HexColor(DEEP_BLUE), borderWidth=2,
+            borderPadding=6, backColor=pdf_colors.HexColor(LIGHT_BG))
         
-        subheading_style = ParagraphStyle(
-            'SubHeading',
-            parent=styles['Heading3'],
-            fontSize=12,
-            textColor=pdf_colors.HexColor('#0077b6'),  # Bright blue
-            spaceAfter=8,
-            spaceBefore=16,
-            fontName='Helvetica-Bold'
-        )
+        subheading_style = ParagraphStyle('SubHeading', parent=styles['Heading3'],
+            fontSize=11, textColor=pdf_colors.HexColor(ACCENT_BLUE), spaceAfter=6,
+            spaceBefore=12, fontName='Helvetica-Bold')
+        
+        body_style = ParagraphStyle('Body', parent=styles['Normal'],
+            fontSize=9, textColor=pdf_colors.HexColor('#444444'), spaceAfter=6,
+            fontName='Helvetica')
+        
+        footer_style = ParagraphStyle('Footer', parent=styles['Normal'],
+            fontSize=7, textColor=pdf_colors.HexColor('#888888'), alignment=TA_CENTER, spaceAfter=3)
+        
+        # Helper to save matplotlib figure to temp file
+        def fig_to_image(fig, width_inches=6.8, height_inches=2.8):
+            import tempfile
+            tmp = tempfile.NamedTemporaryFile(suffix='.png', delete=False)
+            fig.savefig(tmp.name, dpi=200, bbox_inches='tight', facecolor='white', edgecolor='none')
+            plt.close(fig)
+            _temp_files.append(tmp.name)
+            return Image(tmp.name, width=width_inches*inch, height=height_inches*inch)
         
         # =====================================================================
-        # TITLE PAGE
+        # TITLE
         # =====================================================================
-        story.append(Spacer(1, 0.4*inch))  # Reduced from 0.8
+        story.append(Spacer(1, 0.3*inch))
         story.append(Paragraph("Portfolio Performance Report", title_style))
         story.append(Paragraph(
-            f"{portfolio_data.get('start_date', '')} to {portfolio_data.get('end_date', '')}", 
-            subtitle_style
-        ))
+            f"{portfolio_data.get('start_date', '')} — {portfolio_data.get('end_date', '')}", 
+            subtitle_style))
+        story.append(Spacer(1, 0.15*inch))
         
         # =====================================================================
-        # EXECUTIVE SUMMARY
+        # EXECUTIVE SUMMARY - KPI CARDS
         # =====================================================================
-        story.append(Spacer(1, 0.15*inch))  # Reduced spacing before section
         story.append(Paragraph("Executive Summary", heading_style))
-        story.append(Spacer(1, 0.08*inch))  # Reduced from 0.1
+        story.append(Spacer(1, 0.08*inch))
+        
+        current_value = portfolio_data.get('current_value', 0)
+        total_return = portfolio_data.get('total_return', 0)
+        annual_return = portfolio_data.get('annual_return', 0)
+        sharpe = portfolio_data.get('sharpe_ratio', 0)
+        max_dd = portfolio_data.get('max_drawdown', 0)
+        volatility = portfolio_data.get('volatility', 0)
+        total_deposits = portfolio_data.get('total_deposits', 0)
+        total_invested = portfolio_data.get('total_invested', 0)
+        
+        # Determine colors for returns
+        ret_color = GREEN if total_return >= 0 else RED
+        ann_color = GREEN if annual_return >= 0 else RED
         
         summary_data = [
             ['Metric', 'Value', 'Metric', 'Value'],
-            [
-                'Portfolio Value', 
-                f"${portfolio_data.get('current_value', 0):,.0f}",
-                'Total Deposits', 
-                f"${portfolio_data.get('total_deposits', 0):,.0f}"
-            ],
-            [
-                'Total Return', 
-                f"{portfolio_data.get('total_return', 0):+.2f}%",
-                'Total Invested', 
-                f"${portfolio_data.get('total_invested', 0):,.0f}"
-            ],
-            [
-                'Annualized Return', 
-                f"{portfolio_data.get('annual_return', 0):+.2f}%",
-                'Sharpe Ratio', 
-                f"{portfolio_data.get('sharpe_ratio', 0):.2f}"
-            ],
-            [
-                'Max Drawdown', 
-                f"{portfolio_data.get('max_drawdown', 0):.2f}%",
-                'Volatility', 
-                f"{portfolio_data.get('volatility', 0):.2f}%"
-            ],
+            ['Portfolio Value', f"${current_value:,.0f}", 'Total Deposits', f"${total_deposits:,.0f}"],
+            ['Total Return', f"{total_return:+.2f}%", 'Total Invested', f"${total_invested:,.0f}"],
+            ['Annualized Return', f"{annual_return:+.2f}%", 'Sharpe Ratio', f"{sharpe:.2f}"],
+            ['Max Drawdown', f"{max_dd:.2f}%", 'Volatility', f"{volatility:.2f}%"],
         ]
         
-        summary_table = Table(summary_data, colWidths=[2.1*inch, 1.4*inch, 2.1*inch, 1.4*inch])
+        # Calculate profit
+        profit = current_value - total_deposits
+        summary_data.append(['Total Profit/Loss', f"${profit:+,.0f}", '', ''])
         
-        table_style = TableStyle([
-            ('BACKGROUND', (0, 0), (-1, 0), pdf_colors.HexColor('#003d5b')),  # Deep blue header
+        summary_table = Table(summary_data, colWidths=[1.9*inch, 1.5*inch, 1.9*inch, 1.5*inch])
+        summary_table.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (-1, 0), pdf_colors.HexColor(DEEP_BLUE)),
             ('TEXTCOLOR', (0, 0), (-1, 0), pdf_colors.white),
             ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
-            ('FONTSIZE', (0, 0), (-1, 0), 11),
+            ('FONTSIZE', (0, 0), (-1, 0), 10),
             ('BOTTOMPADDING', (0, 0), (-1, 0), 8),
             ('TOPPADDING', (0, 0), (-1, 0), 8),
-            ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
             ('ALIGN', (1, 1), (1, -1), 'RIGHT'),
             ('ALIGN', (3, 1), (3, -1), 'RIGHT'),
             ('FONTNAME', (0, 1), (0, -1), 'Helvetica-Bold'),
             ('FONTNAME', (2, 1), (2, -1), 'Helvetica-Bold'),
-            ('FONTSIZE', (0, 1), (-1, -1), 10),
-            ('ROWBACKGROUNDS', (0, 1), (-1, -1), [
-                pdf_colors.HexColor('#f8f9fa'),  # Very light gray alternating rows
-                pdf_colors.white
-            ]),
-            ('GRID', (0, 0), (-1, -1), 1, pdf_colors.HexColor('#dee2e6')),
-            ('BOX', (0, 0), (-1, -1), 2, pdf_colors.HexColor('#003d5b')),  # Deep blue border
-            ('TOPPADDING', (0, 1), (-1, -1), 10),
-            ('BOTTOMPADDING', (0, 1), (-1, -1), 10),
-            ('LEFTPADDING', (0, 0), (-1, -1), 12),
-            ('RIGHTPADDING', (0, 0), (-1, -1), 12),
-        ])
-        summary_table.setStyle(table_style)
+            ('FONTSIZE', (0, 1), (-1, -1), 9),
+            ('ROWBACKGROUNDS', (0, 1), (-1, -1), [pdf_colors.HexColor(LIGHT_GRAY), pdf_colors.white]),
+            ('GRID', (0, 0), (-1, -1), 0.5, pdf_colors.HexColor(GRID_COLOR)),
+            ('BOX', (0, 0), (-1, -1), 1.5, pdf_colors.HexColor(DEEP_BLUE)),
+            ('TOPPADDING', (0, 1), (-1, -1), 8),
+            ('BOTTOMPADDING', (0, 1), (-1, -1), 8),
+            ('LEFTPADDING', (0, 0), (-1, -1), 10),
+            ('RIGHTPADDING', (0, 0), (-1, -1), 10),
+        ]))
         story.append(summary_table)
         story.append(Spacer(1, 0.2*inch))
         
         # =====================================================================
-        # ASSET ALLOCATION BAR CHART
+        # PORTFOLIO VALUE CHART (with benchmark if available) - LOG SCALE
         # =====================================================================
-        if KALEIDO_AVAILABLE and 'holdings' in portfolio_data and portfolio_data['holdings'] is not None and not portfolio_data['holdings'].empty:
+        if CHARTS_AVAILABLE and 'portfolio_value_series' in portfolio_data and portfolio_data['portfolio_value_series'] is not None:
             try:
-                story.append(Paragraph("Portfolio Composition", heading_style))
-                story.append(Spacer(1, 0.1*inch))  # Reduced from 0.2
+                story.append(Paragraph("Portfolio Growth (Log Scale)", heading_style))
+                story.append(Spacer(1, 0.06*inch))
                 
-                holdings_df = portfolio_data['holdings']
+                pv = portfolio_data['portfolio_value_series']
+                bv = portfolio_data.get('benchmark_value_series', None)
                 
-                # Create horizontal bar chart
-                fig = go.Figure()
+                fig, ax = plt.subplots(figsize=(8, 3.2))
                 
-                # Sort by weight descending
-                sorted_holdings = holdings_df.sort_values('Weight', ascending=True)  # True for horizontal bars
+                ax.plot(pv.index, pv.values, color=DEEP_BLUE, linewidth=1.5, label='Portfolio', zorder=3)
                 
-                fig.add_trace(go.Bar(
-                    y=sorted_holdings['Ticker'],
-                    x=sorted_holdings['Weight'],
-                    orientation='h',
-                    marker=dict(
-                        color=sorted_holdings['Weight'],
-                        colorscale=[[0, '#e8f4f8'], [0.5, '#0077b6'], [1, '#003d5b']],  # Light blue to deep blue gradient
-                        line=dict(color='#003d5b', width=1)
-                    ),
-                    text=[f"{w:.1f}%" for w in sorted_holdings['Weight']],
-                    textposition='outside',
-                    textfont=dict(size=11)
-                ))
+                if bv is not None and len(bv) > 0:
+                    ax.plot(bv.index, bv.values, color='#aaaaaa', linewidth=1.2, linestyle='--', label='Benchmark', zorder=2)
+                    ax.legend(loc='upper left', fontsize=8, framealpha=0.9)
                 
-                fig.update_layout(
-                    template="plotly_white",
-                    height=min(300, len(holdings_df) * 50 + 100),
-                    margin=dict(l=80, r=60, t=40, b=60),
-                    xaxis_title="Weight (%)",
-                    yaxis_title="",
-                    showlegend=False,
-                    font=dict(size=11, family="Helvetica"),
-                    plot_bgcolor='white',
-                    paper_bgcolor='white',
-                    xaxis=dict(showgrid=True, gridwidth=1, gridcolor='#e0e0e0'),
-                    yaxis=dict(showgrid=False)
-                )
+                ax.set_yscale('log')
+                ax.yaxis.set_major_formatter(mticker.FuncFormatter(lambda x, _: f'${x:,.0f}'))
+                ax.xaxis.set_major_formatter(mdates.DateFormatter('%b %Y'))
+                ax.xaxis.set_major_locator(mdates.MonthLocator(interval=6))
+                plt.xticks(rotation=45, fontsize=7)
+                plt.yticks(fontsize=7)
+                ax.set_xlabel('')
+                ax.set_ylabel('Portfolio Value ($)', fontsize=8)
+                ax.grid(True, alpha=0.3, linewidth=0.5)
+                ax.spines['top'].set_visible(False)
+                ax.spines['right'].set_visible(False)
                 
-                # Save as image
-                import tempfile
-                with tempfile.NamedTemporaryFile(suffix='.png', delete=False) as tmp:
-                    fig.write_image(tmp.name, width=700, height=min(350, len(holdings_df) * 50 + 100), engine="kaleido", scale=2)
-                    img = Image(tmp.name, width=6.5*inch, height=min(3*inch, len(holdings_df) * 0.5*inch + 1*inch))
-                    story.append(img)
-                    import os
-                    _temp_files.append(tmp.name)  # Clean up after doc.build()
+                # Add start/end annotations
+                start_val = pv.iloc[0]
+                end_val = pv.iloc[-1]
+                ax.annotate(f'${start_val:,.0f}', xy=(pv.index[0], start_val), fontsize=7, color='#666666')
+                ax.annotate(f'${end_val:,.0f}', xy=(pv.index[-1], end_val), fontsize=7, color=DEEP_BLUE, fontweight='bold')
                 
-                story.append(Spacer(1, 0.08*inch))  # Reduced spacing between charts
-            except Exception as e:
-                print(f"Asset allocation chart error: {e}")
-                pass
-        from reportlab.platypus import PageBreak
-        story.append(PageBreak())
-
-        # =====================================================================
-        # SECTOR ALLOCATION BAR CHART
-        # =====================================================================
-        if KALEIDO_AVAILABLE and 'sector_exposure' in portfolio_data and portfolio_data['sector_exposure'] is not None and not portfolio_data['sector_exposure'].empty:
-            try:
-                story.append(Paragraph("Sector Allocation", subheading_style))
-                story.append(Spacer(1, 0.08*inch))  # Reduced from 0.1
-                
-                sector_df = portfolio_data['sector_exposure']
-                
-                # Create horizontal bar chart
-                fig = go.Figure()
-                
-                # Sort by weight
-                sorted_sectors = sector_df.sort_values('Weight', ascending=True)
-                
-                fig.add_trace(go.Bar(
-                    y=sorted_sectors['Sector'],
-                    x=sorted_sectors['Weight'],
-                    orientation='h',
-                    marker=dict(
-                        color=sorted_sectors['Weight'], 
-                        colorscale=[[0, '#e8f4f8'], [0.5, '#0077b6'], [1, '#003d5b']],  # Light blue to deep blue gradient
-                        line=dict(color='#003d5b', width=1)
-                    ),
-                    text=[f"{w:.1f}%" for w in sorted_sectors['Weight']],
-                    textposition='outside',
-                    textfont=dict(size=10)
-                ))
-                
-                fig.update_layout(
-                    template="plotly_white",
-                    height=min(250, len(sector_df) * 40 + 80),
-                    margin=dict(l=120, r=60, t=20, b=40),
-                    xaxis_title="Weight (%)",
-                    yaxis_title="",
-                    showlegend=False,
-                    font=dict(size=10, family="Helvetica"),
-                    plot_bgcolor='white',
-                    paper_bgcolor='white',
-                    xaxis=dict(showgrid=True, gridwidth=1, gridcolor='#e0e0e0'),
-                    yaxis=dict(showgrid=False)
-                )
-                
-                # Save as image
-                import tempfile
-                with tempfile.NamedTemporaryFile(suffix='.png', delete=False) as tmp:
-                    fig.write_image(tmp.name, width=700, height=min(300, len(sector_df) * 40 + 80), engine="kaleido", scale=2)
-                    img = Image(tmp.name, width=6.5*inch, height=min(2.5*inch, len(sector_df) * 0.4*inch + 0.8*inch))
-                    story.append(img)
-                    import os
-                    _temp_files.append(tmp.name)  # Clean up after doc.build()
-                
-                story.append(Spacer(1, 0.12*inch))  # Compact spacing
-            except Exception as e:
-                print(f"Sector allocation chart error: {e}")
-                pass
-        
-        # =====================================================================
-        # GEOGRAPHIC ALLOCATION BAR CHART
-        # =====================================================================
-        if KALEIDO_AVAILABLE and 'geographic_exposure' in portfolio_data and portfolio_data['geographic_exposure'] is not None and not portfolio_data['geographic_exposure'].empty:
-            try:
-                story.append(Paragraph("Geographic Allocation", subheading_style))
-                story.append(Spacer(1, 0.08*inch))  # Reduced from 0.1
-                
-                geo_df = portfolio_data['geographic_exposure']
-                
-                # Create horizontal bar chart
-                fig = go.Figure()
-                
-                # Sort by weight
-                sorted_geo = geo_df.sort_values('Weight', ascending=True)
-                
-                fig.add_trace(go.Bar(
-                    y=sorted_geo['Geography'],
-                    x=sorted_geo['Weight'],
-                    orientation='h',
-                    marker=dict(
-                        color=sorted_geo['Weight'], 
-                        colorscale=[[0, '#e8f4f8'], [0.5, '#0077b6'], [1, '#003d5b']],  # Light blue to deep blue gradient
-                        line=dict(color='#003d5b', width=1)
-                    ),
-                    text=[f"{w:.1f}%" for w in sorted_geo['Weight']],
-                    textposition='outside',
-                    textfont=dict(size=10)
-                ))
-                
-                fig.update_layout(
-                    template="plotly_white",
-                    height=min(250, len(geo_df) * 40 + 80),
-                    margin=dict(l=120, r=60, t=20, b=40),
-                    xaxis_title="Weight (%)",
-                    yaxis_title="",
-                    showlegend=False,
-                    font=dict(size=10, family="Helvetica"),
-                    plot_bgcolor='white',
-                    paper_bgcolor='white',
-                    xaxis=dict(showgrid=True, gridwidth=1, gridcolor='#e0e0e0'),
-                    yaxis=dict(showgrid=False)
-                )
-                
-                # Save as image
-                import tempfile
-                with tempfile.NamedTemporaryFile(suffix='.png', delete=False) as tmp:
-                    fig.write_image(tmp.name, width=700, height=min(300, len(geo_df) * 40 + 80), engine="kaleido", scale=2)
-                    img = Image(tmp.name, width=6.5*inch, height=min(2.5*inch, len(geo_df) * 0.4*inch + 0.8*inch))
-                    story.append(img)
-                    import os
-                    _temp_files.append(tmp.name)  # Clean up after doc.build()
-                
-                story.append(Spacer(1, 0.15*inch))  # Spacing before next section
-            except Exception as e:
-                print(f"Geographic allocation chart error: {e}")
-                pass
-        
-        # =====================================================================
-        # PORTFOLIO VALUE OVER TIME CHART
-        # =====================================================================
-        if KALEIDO_AVAILABLE and 'portfolio_value_series' in portfolio_data and portfolio_data['portfolio_value_series'] is not None:
-            try:
-                # Try to fit on same page, add PageBreak only if needed
-                story.append(Spacer(1, 0.25*inch))  # Space between sections
-                story.append(Paragraph("Portfolio Value Over Time", heading_style))
-                story.append(Spacer(1, 0.1*inch))  # Reduced from 0.2
-                
-                fig = go.Figure()
-                fig.add_trace(go.Scatter(
-                    x=portfolio_data['portfolio_value_series'].index,
-                    y=portfolio_data['portfolio_value_series'].values,
-                    mode='lines',
-                    name='Portfolio Value',
-                    line=dict(color='#003d5b', width=2)  # Deep blue line, no fill
-                ))
-                
-                fig.update_layout(
-                    template="plotly_white",
-                    height=400,  # Reduced from 500 for more compact layout
-                    margin=dict(l=60, r=40, t=30, b=50),  # Tighter margins
-                    xaxis_title="Date",
-                    yaxis_title="Portfolio Value ($)",
-                    showlegend=False,
-                    font=dict(size=10, family="Helvetica"),
-                    plot_bgcolor='white',
-                    paper_bgcolor='white'
-                )
-                
-                fig.update_xaxes(showgrid=True, gridwidth=1, gridcolor='#e0e0e0')
-                fig.update_yaxes(showgrid=True, gridwidth=1, gridcolor='#e0e0e0', tickformat='$,.0f')
-                
-                # Save as image
-                import tempfile
-                with tempfile.NamedTemporaryFile(suffix='.png', delete=False) as tmp:
-                    fig.write_image(tmp.name, width=700, height=350, engine="kaleido", scale=2)  # Reduced height
-                    img = Image(tmp.name, width=6.5*inch, height=2.5*inch)  # Reduced from 3*inch
-                    story.append(img)
-                    import os
-                    _temp_files.append(tmp.name)  # Clean up after doc.build()
-                
-                story.append(Spacer(1, 0.2*inch))  # Space before next section
+                fig.tight_layout()
+                story.append(fig_to_image(fig, 6.8, 2.8))
+                story.append(Spacer(1, 0.1*inch))
             except Exception as e:
                 print(f"Portfolio value chart error: {e}")
-                pass
-        from reportlab.platypus import PageBreak
+        
+        # =====================================================================
+        # DRAWDOWN CHART
+        # =====================================================================
+        if CHARTS_AVAILABLE and 'portfolio_value_series' in portfolio_data and portfolio_data['portfolio_value_series'] is not None:
+            try:
+                story.append(Paragraph("Drawdown Analysis", subheading_style))
+                story.append(Spacer(1, 0.04*inch))
+                
+                pv = portfolio_data['portfolio_value_series']
+                running_max = pv.cummax()
+                drawdown = ((pv - running_max) / running_max) * 100
+                
+                fig, ax = plt.subplots(figsize=(8, 2.0))
+                ax.fill_between(drawdown.index, drawdown.values, 0, color=RED, alpha=0.25, zorder=2)
+                ax.plot(drawdown.index, drawdown.values, color=RED, linewidth=0.8, zorder=3)
+                ax.axhline(y=0, color='#333333', linewidth=0.5)
+                
+                # Mark max drawdown
+                min_dd_idx = drawdown.idxmin()
+                min_dd_val = drawdown.min()
+                ax.annotate(f'Max: {min_dd_val:.1f}%', xy=(min_dd_idx, min_dd_val),
+                           fontsize=7, color=RED, fontweight='bold',
+                           xytext=(10, -15), textcoords='offset points',
+                           arrowprops=dict(arrowstyle='->', color=RED, lw=0.8))
+                
+                ax.yaxis.set_major_formatter(mticker.FuncFormatter(lambda x, _: f'{x:.0f}%'))
+                ax.xaxis.set_major_formatter(mdates.DateFormatter('%b %Y'))
+                ax.xaxis.set_major_locator(mdates.MonthLocator(interval=6))
+                plt.xticks(rotation=45, fontsize=7)
+                plt.yticks(fontsize=7)
+                ax.set_ylabel('Drawdown', fontsize=8)
+                ax.grid(True, alpha=0.2, linewidth=0.5)
+                ax.spines['top'].set_visible(False)
+                ax.spines['right'].set_visible(False)
+                fig.tight_layout()
+                story.append(fig_to_image(fig, 6.8, 1.8))
+            except Exception as e:
+                print(f"Drawdown chart error: {e}")
+        
         story.append(PageBreak())
+        
+        # =====================================================================
+        # ASSET ALLOCATION
+        # =====================================================================
+        if CHARTS_AVAILABLE and 'holdings' in portfolio_data and portfolio_data['holdings'] is not None and not portfolio_data['holdings'].empty:
+            try:
+                story.append(Paragraph("Portfolio Composition", heading_style))
+                story.append(Spacer(1, 0.06*inch))
+                
+                holdings_df = portfolio_data['holdings']
+                sorted_h = holdings_df.sort_values('Weight', ascending=True)
+                
+                fig, ax = plt.subplots(figsize=(8, max(2.0, len(holdings_df) * 0.4)))
+                
+                colors_list = [ACCENT_BLUE if w > 0 else RED for w in sorted_h['Weight']]
+                bars = ax.barh(sorted_h['Ticker'], sorted_h['Weight'], color=colors_list, edgecolor=DEEP_BLUE, linewidth=0.5, height=0.6)
+                
+                for bar, val in zip(bars, sorted_h['Weight']):
+                    ax.text(bar.get_width() + 0.5, bar.get_y() + bar.get_height()/2, f'{val:.1f}%',
+                           va='center', fontsize=8, color='#333333')
+                
+                ax.set_xlabel('Weight (%)', fontsize=8)
+                ax.set_xlim(0, sorted_h['Weight'].max() * 1.2)
+                plt.yticks(fontsize=8)
+                plt.xticks(fontsize=7)
+                ax.grid(True, axis='x', alpha=0.2, linewidth=0.5)
+                ax.spines['top'].set_visible(False)
+                ax.spines['right'].set_visible(False)
+                fig.tight_layout()
+                story.append(fig_to_image(fig, 6.8, max(1.8, len(holdings_df) * 0.35)))
+                story.append(Spacer(1, 0.12*inch))
+            except Exception as e:
+                print(f"Allocation chart error: {e}")
         
         # =====================================================================
         # CURRENT HOLDINGS TABLE
         # =====================================================================
         if 'holdings' in portfolio_data and portfolio_data['holdings'] is not None and not portfolio_data['holdings'].empty:
             story.append(Paragraph("Current Holdings", heading_style))
-            story.append(Spacer(1, 0.08*inch))  # Reduced from 0.1
+            story.append(Spacer(1, 0.06*inch))
             
-            holdings_data = [['Ticker', 'Shares', 'Avg Cost', 'Current Price', 'Value', 'Gain/Loss', 'Return']]
+            holdings_data_rows = [['Ticker', 'Shares', 'Avg Cost', 'Price', 'Value', 'Gain/Loss', 'Return']]
             
             for _, row in portfolio_data['holdings'].iterrows():
-                gain_loss = row.get('Gain/Loss', '$0')
-                return_pct = row.get('Return', '0%')
-                
-                holdings_data.append([
+                holdings_data_rows.append([
                     str(row.get('Ticker', '')),
                     f"{row.get('Shares', 0):.2f}",
                     f"${row.get('Avg Cost', 0):.2f}",
                     f"${row.get('Current Price', 0):.2f}",
                     f"${row.get('Market Value', 0):,.0f}",
-                    str(gain_loss),
-                    str(return_pct)
+                    str(row.get('Gain/Loss', '$0')),
+                    str(row.get('Return', '0%'))
                 ])
             
-            holdings_table = Table(
-                holdings_data, 
-                colWidths=[0.95*inch, 0.85*inch, 0.95*inch, 1.05*inch, 1.05*inch, 1.05*inch, 0.9*inch]
-            )
-            
-            table_style_holdings = TableStyle([
-                ('BACKGROUND', (0, 0), (-1, 0), pdf_colors.HexColor('#003d5b')),  # Deep blue
+            ht = Table(holdings_data_rows, colWidths=[0.9*inch, 0.8*inch, 0.9*inch, 0.9*inch, 1.0*inch, 1.1*inch, 0.9*inch])
+            ht.setStyle(TableStyle([
+                ('BACKGROUND', (0, 0), (-1, 0), pdf_colors.HexColor(DEEP_BLUE)),
                 ('TEXTCOLOR', (0, 0), (-1, 0), pdf_colors.white),
                 ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
-                ('FONTSIZE', (0, 0), (-1, 0), 10),
+                ('FONTSIZE', (0, 0), (-1, 0), 9),
                 ('ALIGN', (0, 0), (-1, 0), 'CENTER'),
-                ('ALIGN', (0, 1), (0, -1), 'CENTER'),
                 ('ALIGN', (1, 1), (-1, -1), 'RIGHT'),
-                ('FONTSIZE', (0, 1), (-1, -1), 9),
-                ('ROWBACKGROUNDS', (0, 1), (-1, -1), [
-                    pdf_colors.white, 
-                    pdf_colors.HexColor('#f8f9fa')  # Light gray
-                ]),
-                ('GRID', (0, 0), (-1, -1), 0.5, pdf_colors.HexColor('#dee2e6')),
-                ('BOX', (0, 0), (-1, -1), 1.5, pdf_colors.HexColor('#003d5b')),  # Deep blue
+                ('ALIGN', (0, 1), (0, -1), 'CENTER'),
+                ('FONTSIZE', (0, 1), (-1, -1), 8),
+                ('ROWBACKGROUNDS', (0, 1), (-1, -1), [pdf_colors.white, pdf_colors.HexColor(LIGHT_GRAY)]),
+                ('GRID', (0, 0), (-1, -1), 0.5, pdf_colors.HexColor(GRID_COLOR)),
+                ('BOX', (0, 0), (-1, -1), 1.5, pdf_colors.HexColor(DEEP_BLUE)),
                 ('TOPPADDING', (0, 0), (-1, -1), 5),
                 ('BOTTOMPADDING', (0, 0), (-1, -1), 5),
-                ('LEFTPADDING', (0, 0), (-1, -1), 6),
-                ('RIGHTPADDING', (0, 0), (-1, -1), 6),
-            ])
-            holdings_table.setStyle(table_style_holdings)
-            story.append(holdings_table)
-            story.append(Spacer(1, 0.2*inch))  # Space before next section
+                ('LEFTPADDING', (0, 0), (-1, -1), 5),
+                ('RIGHTPADDING', (0, 0), (-1, -1), 5),
+            ]))
+            story.append(ht)
+            story.append(Spacer(1, 0.15*inch))
         
         # =====================================================================
         # PERFORMANCE ATTRIBUTION CHART
         # =====================================================================
-        if KALEIDO_AVAILABLE and 'attribution_data' in portfolio_data and portfolio_data['attribution_data']:
+        if CHARTS_AVAILABLE and 'attribution_data' in portfolio_data and portfolio_data['attribution_data']:
             try:
                 story.append(Paragraph("Performance Attribution", heading_style))
+                story.append(Spacer(1, 0.06*inch))
+                
+                sorted_attr = sorted(portfolio_data['attribution_data'], key=lambda x: x['Return (%)'], reverse=True)
+                assets = [item['Asset'] for item in sorted_attr]
+                returns_pct = [item['Return (%)'] for item in sorted_attr]
+                
+                fig, ax = plt.subplots(figsize=(8, 2.5))
+                bar_colors = [GREEN if r >= 0 else RED for r in returns_pct]
+                bars = ax.bar(assets, returns_pct, color=bar_colors, edgecolor=DEEP_BLUE, linewidth=0.5, width=0.6)
+                
+                for bar, val in zip(bars, returns_pct):
+                    y_pos = bar.get_height() + 2 if val >= 0 else bar.get_height() - 8
+                    ax.text(bar.get_x() + bar.get_width()/2, y_pos, f'{val:+.1f}%',
+                           ha='center', fontsize=8, color='#333333', fontweight='bold')
+                
+                ax.axhline(y=0, color='#333333', linewidth=0.8)
+                ax.set_ylabel('Return (%)', fontsize=8)
+                ax.yaxis.set_major_formatter(mticker.FuncFormatter(lambda x, _: f'{x:+.0f}%'))
+                plt.xticks(rotation=30, fontsize=8, ha='right')
+                plt.yticks(fontsize=7)
+                ax.grid(True, axis='y', alpha=0.2, linewidth=0.5)
+                ax.spines['top'].set_visible(False)
+                ax.spines['right'].set_visible(False)
+                fig.tight_layout()
+                story.append(fig_to_image(fig, 6.8, 2.3))
                 story.append(Spacer(1, 0.1*inch))
-                
-                # Prepare data - USE PERCENTAGES instead of dollars
-                # Sort by return percentage (highest to lowest) for better visualization
-                sorted_attribution = sorted(portfolio_data['attribution_data'], 
-                                          key=lambda x: x['Return (%)'], 
-                                          reverse=True)
-                
-                assets = [item['Asset'] for item in sorted_attribution]
-                returns_pct = [item['Return (%)'] for item in sorted_attribution]
-                
-                # Create bar chart
-                fig = go.Figure()
-                
-                fig.add_trace(go.Bar(
-                    x=assets,
-                    y=returns_pct,
-                    marker=dict(
-                        color=returns_pct,
-                        colorscale=[[0, '#ef5350'], [0.5, '#f0f4f8'], [1, '#003d5b']],  # Red to white to deep blue
-                        line=dict(color='#003d5b', width=1),
-                        cmid=0
-                    ),
-                    text=[f"{r:+.1f}%" for r in returns_pct],
-                    textposition='outside',
-                    textfont=dict(size=10)
-                ))
-                
-                fig.update_layout(
-                    template="plotly_white",
-                    height=350,
-                    margin=dict(l=60, r=40, t=30, b=70),
-                    xaxis_title="Asset",
-                    yaxis_title="Return (%)",
-                    showlegend=False,
-                    font=dict(size=10, family="Helvetica"),
-                    plot_bgcolor='white',
-                    paper_bgcolor='white',
-                    xaxis=dict(tickangle=-45)
-                )
-                
-                fig.add_hline(y=0, line_dash="dash", line_color="gray", line_width=1)
-                fig.update_yaxes(showgrid=True, gridwidth=1, gridcolor='#e0e0e0', tickformat='+.1f', ticksuffix='%', zeroline=True)
-                
-                # Save as image
-                import tempfile
-                with tempfile.NamedTemporaryFile(suffix='.png', delete=False) as tmp:
-                    fig.write_image(tmp.name, width=700, height=350, engine="kaleido", scale=2)
-                    img = Image(tmp.name, width=6.5*inch, height=2.8*inch)
-                    story.append(img)
-                    import os
-                    _temp_files.append(tmp.name)  # Clean up after doc.build()
-                
-                story.append(Spacer(1, 0.15*inch))
             except Exception as e:
                 print(f"Attribution chart error: {e}")
-                pass
-        
-        # Add page break after performance attribution chart
-        from reportlab.platypus import PageBreak
-        story.append(PageBreak())
         
         # =====================================================================
-        # PERFORMANCE ATTRIBUTION TABLE
+        # DETAILED ATTRIBUTION TABLE
         # =====================================================================
         if 'attribution_data' in portfolio_data and portfolio_data['attribution_data']:
             story.append(Paragraph("Detailed Attribution", subheading_style))
-            story.append(Spacer(1, 0.08*inch))  # Small space before table
+            story.append(Spacer(1, 0.04*inch))
             
-            attr_data = [['Asset', 'Invested', 'Current Value', 'Gain/Loss', 'Return %']]
-            
+            attr_rows = [['Asset', 'Invested', 'Current Value', 'Gain/Loss', 'Return %']]
             for item in portfolio_data['attribution_data']:
-                attr_data.append([
+                attr_rows.append([
                     str(item['Asset']),
                     f"${item['Invested']:,.0f}",
                     f"${item['Current Value']:,.0f}",
-                    f"${item['Gain/Loss ($)']:,.0f}",
+                    f"${item['Gain/Loss ($)']:+,.0f}",
                     f"{item['Return (%)']:+.2f}%"
                 ])
             
-            attr_table = Table(attr_data, colWidths=[1.5*inch, 1.4*inch, 1.4*inch, 1.4*inch, 1.3*inch])
-            
-            table_style_attr = TableStyle([
-                ('BACKGROUND', (0, 0), (-1, 0), pdf_colors.HexColor('#003d5b')),  # Deep blue
+            at = Table(attr_rows, colWidths=[1.4*inch, 1.4*inch, 1.4*inch, 1.3*inch, 1.2*inch])
+            at.setStyle(TableStyle([
+                ('BACKGROUND', (0, 0), (-1, 0), pdf_colors.HexColor(DEEP_BLUE)),
                 ('TEXTCOLOR', (0, 0), (-1, 0), pdf_colors.white),
                 ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
-                ('FONTSIZE', (0, 0), (-1, 0), 10),
-                ('ALIGN', (0, 0), (0, -1), 'LEFT'),
+                ('FONTSIZE', (0, 0), (-1, 0), 9),
                 ('ALIGN', (1, 0), (-1, -1), 'RIGHT'),
-                ('FONTSIZE', (0, 1), (-1, -1), 9),
-                ('ROWBACKGROUNDS', (0, 1), (-1, -1), [
-                    pdf_colors.white, 
-                    pdf_colors.HexColor('#f8f9fa')  # Light gray
-                ]),
-                ('GRID', (0, 0), (-1, -1), 0.5, pdf_colors.HexColor('#dee2e6')),
-                ('BOX', (0, 0), (-1, -1), 1.5, pdf_colors.HexColor('#003d5b')),  # Deep blue
+                ('FONTSIZE', (0, 1), (-1, -1), 8),
+                ('ROWBACKGROUNDS', (0, 1), (-1, -1), [pdf_colors.white, pdf_colors.HexColor(LIGHT_GRAY)]),
+                ('GRID', (0, 0), (-1, -1), 0.5, pdf_colors.HexColor(GRID_COLOR)),
+                ('BOX', (0, 0), (-1, -1), 1.5, pdf_colors.HexColor(DEEP_BLUE)),
                 ('TOPPADDING', (0, 0), (-1, -1), 5),
                 ('BOTTOMPADDING', (0, 0), (-1, -1), 5),
-            ])
-            attr_table.setStyle(table_style_attr)
-            story.append(attr_table)
-            story.append(Spacer(1, 0.15*inch))
+            ]))
+            story.append(at)
+        
+        story.append(PageBreak())
+        
+        # =====================================================================
+        # SECTOR & GEOGRAPHIC ALLOCATION
+        # =====================================================================
+        has_sector = 'sector_exposure' in portfolio_data and portfolio_data['sector_exposure'] is not None and not portfolio_data.get('sector_exposure', pd.DataFrame()).empty
+        has_geo = 'geographic_exposure' in portfolio_data and portfolio_data['geographic_exposure'] is not None and not portfolio_data.get('geographic_exposure', pd.DataFrame()).empty
+        
+        if CHARTS_AVAILABLE and (has_sector or has_geo):
+            story.append(Paragraph("Sector & Geographic Allocation", heading_style))
+            story.append(Spacer(1, 0.06*inch))
+            
+            if has_sector:
+                try:
+                    sector_df = portfolio_data['sector_exposure']
+                    sorted_s = sector_df.sort_values('Weight', ascending=True)
+                    
+                    fig, ax = plt.subplots(figsize=(8, max(2.0, len(sector_df) * 0.35)))
+                    ax.barh(sorted_s['Sector'], sorted_s['Weight'], color=ACCENT_BLUE, edgecolor=DEEP_BLUE, linewidth=0.5, height=0.6)
+                    for i, (val, name) in enumerate(zip(sorted_s['Weight'], sorted_s['Sector'])):
+                        ax.text(val + 0.3, i, f'{val:.1f}%', va='center', fontsize=7, color='#333333')
+                    ax.set_xlabel('Weight (%)', fontsize=8)
+                    ax.set_xlim(0, sorted_s['Weight'].max() * 1.2)
+                    plt.yticks(fontsize=7)
+                    plt.xticks(fontsize=7)
+                    ax.grid(True, axis='x', alpha=0.2)
+                    ax.spines['top'].set_visible(False)
+                    ax.spines['right'].set_visible(False)
+                    ax.set_title('Sector Allocation', fontsize=9, fontweight='bold', color=DEEP_BLUE, loc='left')
+                    fig.tight_layout()
+                    story.append(fig_to_image(fig, 6.8, max(1.8, len(sector_df) * 0.3)))
+                    story.append(Spacer(1, 0.1*inch))
+                except Exception as e:
+                    print(f"Sector chart error: {e}")
+            
+            if has_geo:
+                try:
+                    geo_df = portfolio_data['geographic_exposure']
+                    sorted_g = geo_df.sort_values('Weight', ascending=True)
+                    
+                    fig, ax = plt.subplots(figsize=(8, max(1.5, len(geo_df) * 0.35)))
+                    ax.barh(sorted_g['Geography'], sorted_g['Weight'], color='#4db6ac', edgecolor=DEEP_BLUE, linewidth=0.5, height=0.6)
+                    for i, val in enumerate(sorted_g['Weight']):
+                        ax.text(val + 0.3, i, f'{val:.1f}%', va='center', fontsize=7, color='#333333')
+                    ax.set_xlabel('Weight (%)', fontsize=8)
+                    ax.set_xlim(0, sorted_g['Weight'].max() * 1.2)
+                    plt.yticks(fontsize=7)
+                    plt.xticks(fontsize=7)
+                    ax.grid(True, axis='x', alpha=0.2)
+                    ax.spines['top'].set_visible(False)
+                    ax.spines['right'].set_visible(False)
+                    ax.set_title('Geographic Allocation', fontsize=9, fontweight='bold', color=DEEP_BLUE, loc='left')
+                    fig.tight_layout()
+                    story.append(fig_to_image(fig, 6.8, max(1.5, len(geo_df) * 0.3)))
+                except Exception as e:
+                    print(f"Geographic chart error: {e}")
         
         # =====================================================================
         # RECENT TRANSACTIONS
@@ -1639,13 +1499,12 @@ def generate_pdf_report(portfolio_data, output_path):
         if 'transactions' in portfolio_data and portfolio_data['transactions']:
             story.append(PageBreak())
             story.append(Paragraph("Recent Transactions", heading_style))
-            story.append(Spacer(1, 0.1*inch))
+            story.append(Spacer(1, 0.06*inch))
             
-            trans_data = [['Date', 'Type', 'Ticker', 'Shares', 'Price', 'Amount']]
-            
+            trans_rows = [['Date', 'Type', 'Ticker', 'Shares', 'Price', 'Amount']]
             recent_trans = portfolio_data['transactions'][-20:]
             for trans in recent_trans:
-                trans_data.append([
+                trans_rows.append([
                     trans['date'].strftime('%Y-%m-%d'),
                     trans['type'],
                     trans['ticker'],
@@ -1654,63 +1513,33 @@ def generate_pdf_report(portfolio_data, output_path):
                     f"${trans['amount']:,.0f}"
                 ])
             
-            trans_table = Table(
-                trans_data, 
-                colWidths=[1.1*inch, 1.1*inch, 0.9*inch, 0.9*inch, 1*inch, 1.2*inch]
-            )
-            
-            table_style_trans = TableStyle([
-                ('BACKGROUND', (0, 0), (-1, 0), pdf_colors.HexColor('#003d5b')),  # Deep blue
+            tt = Table(trans_rows, colWidths=[1.1*inch, 0.9*inch, 0.9*inch, 0.8*inch, 0.9*inch, 1.1*inch])
+            tt.setStyle(TableStyle([
+                ('BACKGROUND', (0, 0), (-1, 0), pdf_colors.HexColor(DEEP_BLUE)),
                 ('TEXTCOLOR', (0, 0), (-1, 0), pdf_colors.white),
                 ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
                 ('FONTSIZE', (0, 0), (-1, 0), 9),
                 ('FONTSIZE', (0, 1), (-1, -1), 8),
                 ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
-                ('ROWBACKGROUNDS', (0, 1), (-1, -1), [
-                    pdf_colors.white, 
-                    pdf_colors.HexColor('#f8f9fa')  # Light gray
-                ]),
-                ('GRID', (0, 0), (-1, -1), 0.5, pdf_colors.HexColor('#dee2e6')),
-                ('BOX', (0, 0), (-1, -1), 1.5, pdf_colors.HexColor('#003d5b')),  # Deep blue
-                ('TOPPADDING', (0, 0), (-1, -1), 6),
-                ('BOTTOMPADDING', (0, 0), (-1, -1), 6),
-            ])
-            trans_table.setStyle(table_style_trans)
-            story.append(trans_table)
+                ('ROWBACKGROUNDS', (0, 1), (-1, -1), [pdf_colors.white, pdf_colors.HexColor(LIGHT_GRAY)]),
+                ('GRID', (0, 0), (-1, -1), 0.5, pdf_colors.HexColor(GRID_COLOR)),
+                ('BOX', (0, 0), (-1, -1), 1.5, pdf_colors.HexColor(DEEP_BLUE)),
+                ('TOPPADDING', (0, 0), (-1, -1), 4),
+                ('BOTTOMPADDING', (0, 0), (-1, -1), 4),
+            ]))
+            story.append(tt)
         
         # =====================================================================
         # FOOTER
         # =====================================================================
-        story.append(Spacer(1, 0.2*inch))
-        
-        footer_style = ParagraphStyle(
-            'Footer',
-            parent=styles['Normal'],
-            fontSize=8,
-            textColor=pdf_colors.HexColor('#666666'),
-            alignment=TA_CENTER,
-            spaceAfter=4
-        )
-        
-        story.append(Paragraph(
-            f"Generated on {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}", 
-            footer_style
-        ))
-        story.append(Paragraph(
-            "This report is for informational purposes only and does not constitute investment advice.", 
-            footer_style
-        ))
-        
-        if not KALEIDO_AVAILABLE:
-            story.append(Paragraph(
-                "Note: Install 'kaleido' package for enhanced chart visualizations (pip install kaleido).",
-                footer_style
-            ))
+        story.append(Spacer(1, 0.3*inch))
+        story.append(Paragraph(f"Generated on {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}", footer_style))
+        story.append(Paragraph("This report is for informational purposes only and does not constitute investment advice.", footer_style))
         
         # Build PDF
         doc.build(story)
         
-        # Clean up temp image files after PDF is built
+        # Clean up temp image files
         for tmp_file in _temp_files:
             try:
                 os.unlink(tmp_file)
@@ -7637,6 +7466,7 @@ elif page == "Portfolio Tracker":
                                 'volatility': portfolio_risk_metrics.get('annual_volatility', 0),
                                 'holdings': pd.DataFrame(holdings_data) if holdings_data else pd.DataFrame(),
                                 'portfolio_value_series': portfolio_value_series,
+                                'benchmark_value_series': benchmark_value_series if 'benchmark_value_series' in locals() else None,
                                 'attribution_data': pdf_attribution_data,
                                 'sector_exposure': sector_exposure_pdf,
                                 'geographic_exposure': geographic_exposure_pdf

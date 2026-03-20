@@ -1,8 +1,9 @@
 streamlit
-yfinance==0.2.66
+yfinance
 pandas
 plotly
 numpy
 scipy
-kaleido
 reportlab
+matplotlib
+requests
