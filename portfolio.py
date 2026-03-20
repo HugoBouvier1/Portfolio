@@ -2659,20 +2659,22 @@ if page == "Portfolio Overview":
     selected_category = st.sidebar.selectbox("Category", list(categories.keys()))
     available_tickers = categories[selected_category]
 
-    # Initialize session state
+    # Initialize session state for custom tickers if not exists
     if 'custom_tickers_list' not in st.session_state:
         st.session_state.custom_tickers_list = []
     
+    # Initialize session state for selected tickers in market overview
     if 'market_selected_tickers' not in st.session_state:
         st.session_state.market_selected_tickers = None
     
+    # Track category changes to reset defaults
     if 'last_market_category' not in st.session_state:
         st.session_state.last_market_category = selected_category
 
-    # Combine all available tickers
+    # Combine predefined tickers with any previously added custom tickers
     all_available_tickers = available_tickers + [t for t in st.session_state.custom_tickers_list if t not in available_tickers]
 
-    # Set default based on category
+    # Set default based on category (only when category changes or first load)
     if st.session_state.last_market_category != selected_category or st.session_state.market_selected_tickers is None:
         if selected_category == "Stocks":
             default_tickers = ["AAPL", "GOOGL", "MSFT", "AMZN"]
@@ -2687,53 +2689,52 @@ if page == "Portfolio Overview":
         else:
             default_tickers = available_tickers[:3]
         
+        # Filter defaults to only include available ones
         default_tickers = [t for t in default_tickers if t in all_available_tickers]
         st.session_state.market_selected_tickers = default_tickers
         st.session_state.last_market_category = selected_category
 
-    # Add custom tickers
+    # Quick add custom tickers FIRST - so they appear immediately
     st.sidebar.markdown("**➕ Add Custom Tickers**")
-    
-    # Check if we have pending tickers to add (from previous run)
-    if 'pending_tickers' not in st.session_state:
-        st.session_state.pending_tickers = []
-    
-    # Process pending tickers from previous rerun
-    if st.session_state.pending_tickers:
-        for ticker in st.session_state.pending_tickers:
-            if ticker not in st.session_state.custom_tickers_list:
-                st.session_state.custom_tickers_list.append(ticker)
-            if ticker not in st.session_state.market_selected_tickers:
-                st.session_state.market_selected_tickers.append(ticker)
-        st.session_state.pending_tickers = []
-    
-    # Rebuild available tickers (including any just-added ones)
-    all_available_tickers = available_tickers + [t for t in st.session_state.custom_tickers_list if t not in available_tickers]
-    
-    def _on_ticker_submit():
-        val = st.session_state.get('_ticker_input_field', '').strip()
-        if val:
-            import re
-            new_tickers = re.split(r'[,;\s]+', val)
-            new_tickers = [t.upper().strip() for t in new_tickers if t.strip()]
-            st.session_state.pending_tickers = new_tickers
-            st.session_state._ticker_input_field = ""
-    
-    st.sidebar.text_input(
+    custom_ticker_input = st.sidebar.text_input(
         "Enter ticker(s)",
-        placeholder="e.g., SPY, NFLX, DIS",
-        help="Enter one or multiple tickers separated by commas. Press Enter to add.",
-        key="_ticker_input_field",
-        on_change=_on_ticker_submit
+        placeholder="e.g., NFLX, DIS, UBER",
+        help="Enter one or multiple tickers separated by commas, spaces, or semicolons. Press Enter to add.",
+        key="custom_ticker_input"
     )
 
-    # Multiselect with current selection
-    valid_defaults = [t for t in st.session_state.market_selected_tickers if t in all_available_tickers]
+    # Process new tickers BEFORE rendering the multiselect
+    if custom_ticker_input:
+        # Parse multiple tickers from input (handle commas, spaces, semicolons)
+        import re
+        new_tickers = re.split(r'[,;\s]+', custom_ticker_input.strip())
+        new_tickers = [t.upper().strip() for t in new_tickers if t.strip()]
     
+        if new_tickers:
+            added_tickers = []
+            for ticker in new_tickers:
+                # Add to custom tickers list (persistent across category changes)
+                if ticker not in st.session_state.custom_tickers_list:
+                    st.session_state.custom_tickers_list.append(ticker)
+                    # Also add to all_available_tickers for this render
+                    if ticker not in all_available_tickers:
+                        all_available_tickers.append(ticker)
+                
+                # Add to selected tickers
+                if ticker not in st.session_state.market_selected_tickers:
+                    st.session_state.market_selected_tickers.append(ticker)
+                    added_tickers.append(ticker)
+            
+            if added_tickers:
+                st.sidebar.success(f"✅ Added: {', '.join(added_tickers)}")
+                # Clear the input and rerun to show updated selection
+                st.rerun()
+
+    # Now render the multiselect with the current selection
     selected_tickers = st.sidebar.multiselect(
         "Tickers",
         options=all_available_tickers,
-        default=valid_defaults,
+        default=st.session_state.market_selected_tickers,
         help="Select from list or add custom tickers above",
         key="market_ticker_multiselect"
     )
