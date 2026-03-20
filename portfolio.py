@@ -1093,13 +1093,23 @@ def generate_pdf_report(portfolio_data, output_path):
         from reportlab.lib.enums import TA_CENTER, TA_RIGHT, TA_LEFT
         
         # Check if kaleido/plotly available for charts
+        KALEIDO_AVAILABLE = False
         try:
             import plotly.graph_objects as go
             import kaleido
+            # Test that kaleido actually works (not just importable)
+            test_fig = go.Figure(data=[go.Bar(x=[1], y=[1])])
+            import tempfile
+            with tempfile.NamedTemporaryFile(suffix='.png', delete=True) as tmp:
+                test_fig.write_image(tmp.name, engine="kaleido", width=100, height=100)
             KALEIDO_AVAILABLE = True
-        except ImportError:
+        except Exception as e:
             KALEIDO_AVAILABLE = False
-            print("⚠️  Kaleido not available - some charts will be simplified")
+            print(f"⚠️  Kaleido not available - charts will be skipped in PDF: {e}")
+        
+        # Ensure output directory exists
+        output_path = Path(output_path)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
         
         doc = SimpleDocTemplate(
             str(output_path), 
@@ -1111,6 +1121,7 @@ def generate_pdf_report(portfolio_data, output_path):
         )
         
         story = []
+        _temp_files = []  # Track temp files for cleanup after PDF build
         styles = getSampleStyleSheet()
         
         # =====================================================================
@@ -1286,7 +1297,7 @@ def generate_pdf_report(portfolio_data, output_path):
                     img = Image(tmp.name, width=6.5*inch, height=min(3*inch, len(holdings_df) * 0.5*inch + 1*inch))
                     story.append(img)
                     import os
-                    os.unlink(tmp.name)
+                    _temp_files.append(tmp.name)  # Clean up after doc.build()
                 
                 story.append(Spacer(1, 0.08*inch))  # Reduced spacing between charts
             except Exception as e:
@@ -1346,7 +1357,7 @@ def generate_pdf_report(portfolio_data, output_path):
                     img = Image(tmp.name, width=6.5*inch, height=min(2.5*inch, len(sector_df) * 0.4*inch + 0.8*inch))
                     story.append(img)
                     import os
-                    os.unlink(tmp.name)
+                    _temp_files.append(tmp.name)  # Clean up after doc.build()
                 
                 story.append(Spacer(1, 0.12*inch))  # Compact spacing
             except Exception as e:
@@ -1404,7 +1415,7 @@ def generate_pdf_report(portfolio_data, output_path):
                     img = Image(tmp.name, width=6.5*inch, height=min(2.5*inch, len(geo_df) * 0.4*inch + 0.8*inch))
                     story.append(img)
                     import os
-                    os.unlink(tmp.name)
+                    _temp_files.append(tmp.name)  # Clean up after doc.build()
                 
                 story.append(Spacer(1, 0.15*inch))  # Spacing before next section
             except Exception as e:
@@ -1452,7 +1463,7 @@ def generate_pdf_report(portfolio_data, output_path):
                     img = Image(tmp.name, width=6.5*inch, height=2.5*inch)  # Reduced from 3*inch
                     story.append(img)
                     import os
-                    os.unlink(tmp.name)
+                    _temp_files.append(tmp.name)  # Clean up after doc.build()
                 
                 story.append(Spacer(1, 0.2*inch))  # Space before next section
             except Exception as e:
@@ -1570,7 +1581,7 @@ def generate_pdf_report(portfolio_data, output_path):
                     img = Image(tmp.name, width=6.5*inch, height=2.8*inch)
                     story.append(img)
                     import os
-                    os.unlink(tmp.name)
+                    _temp_files.append(tmp.name)  # Clean up after doc.build()
                 
                 story.append(Spacer(1, 0.15*inch))
             except Exception as e:
@@ -1698,6 +1709,14 @@ def generate_pdf_report(portfolio_data, output_path):
         
         # Build PDF
         doc.build(story)
+        
+        # Clean up temp image files after PDF is built
+        for tmp_file in _temp_files:
+            try:
+                os.unlink(tmp_file)
+            except OSError:
+                pass
+        
         return True
         
     except Exception as e:
