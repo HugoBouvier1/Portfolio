@@ -2614,7 +2614,7 @@ if page == "Portfolio Overview":
             st.session_state.end_date = datetime.combine(dr[1], datetime.min.time())
     
     st.sidebar.date_input(
-        "",
+        "Date range",
         value=(st.session_state.start_date.date(), st.session_state.end_date.date()),
         max_value=datetime.now(),
         label_visibility="collapsed",
