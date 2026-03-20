@@ -2728,12 +2728,15 @@ if page == "Portfolio Overview":
                 st.rerun()
 
     # Now render the multiselect with the current selection
+    # Ensure defaults only contain valid options
+    valid_defaults = [t for t in st.session_state.market_selected_tickers if t in all_available_tickers]
+    
     selected_tickers = st.sidebar.multiselect(
         "Tickers",
         options=all_available_tickers,
-        default=st.session_state.market_selected_tickers,
+        default=valid_defaults,
         help="Select from list or add custom tickers above",
-        key="market_ticker_multiselect"
+        key=f"market_ticker_multiselect_{selected_category}"
     )
     
     # Update session state when user manually changes selection
