@@ -2694,47 +2694,40 @@ if page == "Portfolio Overview":
     # Add custom tickers
     st.sidebar.markdown("**➕ Add Custom Tickers**")
     
-    # One-shot rerun guard
-    if 'ticker_just_added' not in st.session_state:
-        st.session_state.ticker_just_added = False
+    # Check if we have pending tickers to add (from previous run)
+    if 'pending_tickers' not in st.session_state:
+        st.session_state.pending_tickers = []
     
-    custom_ticker_input = st.sidebar.text_input(
-        "Enter ticker(s)",
-        placeholder="e.g., NFLX, DIS, UBER",
-        help="Enter one or multiple tickers separated by commas, spaces, or semicolons. Press Enter to add.",
-        key="custom_ticker_input",
-        value="" if st.session_state.ticker_just_added else ""
-    )
+    # Process pending tickers from previous rerun
+    if st.session_state.pending_tickers:
+        for ticker in st.session_state.pending_tickers:
+            if ticker not in st.session_state.custom_tickers_list:
+                st.session_state.custom_tickers_list.append(ticker)
+            if ticker not in st.session_state.market_selected_tickers:
+                st.session_state.market_selected_tickers.append(ticker)
+        st.session_state.pending_tickers = []
     
-    # Reset the flag after rendering the input
-    if st.session_state.ticker_just_added:
-        st.session_state.ticker_just_added = False
-
-    # Process new tickers BEFORE rendering the multiselect
-    if custom_ticker_input and not st.session_state.ticker_just_added:
-        import re
-        new_tickers = re.split(r'[,;\s]+', custom_ticker_input.strip())
-        new_tickers = [t.upper().strip() for t in new_tickers if t.strip()]
-    
-        if new_tickers:
-            added_any = False
-            for ticker in new_tickers:
-                if ticker not in st.session_state.custom_tickers_list:
-                    st.session_state.custom_tickers_list.append(ticker)
-                
-                if ticker not in st.session_state.market_selected_tickers:
-                    st.session_state.market_selected_tickers.append(ticker)
-                    added_any = True
-            
-            if added_any:
-                st.session_state.ticker_just_added = True
-                st.session_state.custom_ticker_input = ""
-                st.rerun()
-
-    # Rebuild available tickers after additions
+    # Rebuild available tickers (including any just-added ones)
     all_available_tickers = available_tickers + [t for t in st.session_state.custom_tickers_list if t not in available_tickers]
+    
+    def _on_ticker_submit():
+        val = st.session_state.get('_ticker_input_field', '').strip()
+        if val:
+            import re
+            new_tickers = re.split(r'[,;\s]+', val)
+            new_tickers = [t.upper().strip() for t in new_tickers if t.strip()]
+            st.session_state.pending_tickers = new_tickers
+            st.session_state._ticker_input_field = ""
+    
+    st.sidebar.text_input(
+        "Enter ticker(s)",
+        placeholder="e.g., SPY, NFLX, DIS",
+        help="Enter one or multiple tickers separated by commas. Press Enter to add.",
+        key="_ticker_input_field",
+        on_change=_on_ticker_submit
+    )
 
-    # Now render the multiselect
+    # Multiselect with current selection
     valid_defaults = [t for t in st.session_state.market_selected_tickers if t in all_available_tickers]
     
     selected_tickers = st.sidebar.multiselect(
