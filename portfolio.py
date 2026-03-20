@@ -2649,11 +2649,10 @@ if page == "Portfolio Overview":
     # Predefined quick-add categories
     categories = {
         "Stocks": ["AAPL", "GOOGL", "MSFT", "AMZN", "TSLA", "NVDA", "META"],
-        "Indices": ["^GSPC", "^DJI", "^IXIC", "^RUT", "SPY", "QQQ"],
-        "Bonds": ["TLT", "IEF", "SHY", "AGG", "BND"],
+        "Indices": ["^GSPC", "^DJI", "^IXIC", "^RUT", "SPY", "QQQ", "SPMO", "SCHD", "SPLV", "QUAL", "VIG"],
+        "Bonds": ["TLT", "IEF", "SHY", "AGG", "BND", "TIP", "DBMF"],
         "Volatility": ["^VIX", "VIXY", "UVXY"],
-        "Commodities": ["GC=F", "CL=F", "SI=F", "GLD", "USO"],
-        "Portfolio ETFs": ["SPMO", "SCHD", "TLT", "GLD", "DBMF", "SPLV", "USMV", "QUAL", "VIG", "DBC", "TIP", "VXUS", "IEF"]
+        "Commodities": ["GC=F", "CL=F", "SI=F", "GLD", "USO", "DBC"]
     }
 
     selected_category = st.sidebar.selectbox("Category", list(categories.keys()))
@@ -2684,8 +2683,6 @@ if page == "Portfolio Overview":
             default_tickers = ["TLT", "IEF", "AGG"]
         elif selected_category == "Volatility":
             default_tickers = ["^VIX"]
-        elif selected_category == "Portfolio ETFs":
-            default_tickers = ["SPMO", "SCHD", "TLT", "GLD", "DBMF"]
         else:
             default_tickers = available_tickers[:3]
         
