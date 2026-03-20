@@ -321,6 +321,20 @@ SECTOR_MAPPING = {
     'USO': 'Commodities', 'DBC': 'Commodities',
     'VNQ': 'Real Estate', 'IYR': 'Real Estate', 'XLRE': 'Real Estate',
     
+    # Momentum, Dividend, Managed Futures ETFs
+    'SPMO': 'US Equity Momentum', 'MTUM': 'US Equity Momentum',
+    'SCHD': 'US Dividend Equity', 'VIG': 'US Dividend Equity', 'VHYL': 'Dividend Equity',
+    'DBMF': 'Managed Futures', 'CTA': 'Managed Futures', 'KMLM': 'Managed Futures',
+    'SPLV': 'Low Volatility', 'USMV': 'Low Volatility',
+    'QUAL': 'Quality Factor', 'FUSA.L': 'Quality Factor',
+    'VXUS': 'International Equity', 'IXUS': 'International Equity',
+    'TIP': 'Inflation-Protected Bonds', 'VTIP': 'Inflation-Protected Bonds',
+    
+    # UCITS equivalents
+    'IUMO.L': 'US Equity Momentum', 'IUMF.L': 'US Equity Momentum',
+    'DTLA.L': 'Government Bonds', 'IDTL.L': 'Government Bonds',
+    'IGLN.L': 'Commodities',
+    
     # Sector ETFs
     'XLK': 'Technology', 'XLF': 'Financials', 'XLV': 'Healthcare',
     'XLE': 'Energy', 'XLI': 'Industrials', 'XLY': 'Consumer Discretionary',
@@ -352,6 +366,20 @@ GEOGRAPHIC_MAPPING = {
     # Default to US for bonds, commodities
     'TLT': 'United States', 'IEF': 'United States', 'AGG': 'United States',
     'BND': 'United States', 'GLD': 'Global', 'SLV': 'Global',
+    
+    # Portfolio ETFs
+    'SPMO': 'United States', 'MTUM': 'United States',
+    'SCHD': 'United States', 'VIG': 'United States',
+    'DBMF': 'Global', 'CTA': 'Global', 'KMLM': 'Global',
+    'SPLV': 'United States', 'USMV': 'United States',
+    'QUAL': 'United States', 'DBC': 'Global',
+    'TIP': 'United States', 'VXUS': 'International',
+    
+    # UCITS equivalents
+    'IUMO.L': 'United States', 'IUMF.L': 'United States',
+    'FUSA.L': 'United States',
+    'DTLA.L': 'United States', 'IDTL.L': 'United States',
+    'IGLN.L': 'Global',
 }
 
 STRESS_SCENARIOS = {
@@ -2624,28 +2652,27 @@ if page == "Portfolio Overview":
         "Indices": ["^GSPC", "^DJI", "^IXIC", "^RUT", "SPY", "QQQ"],
         "Bonds": ["TLT", "IEF", "SHY", "AGG", "BND"],
         "Volatility": ["^VIX", "VIXY", "UVXY"],
-        "Commodities": ["GC=F", "CL=F", "SI=F", "GLD", "USO"]
+        "Commodities": ["GC=F", "CL=F", "SI=F", "GLD", "USO"],
+        "Portfolio ETFs": ["SPMO", "SCHD", "TLT", "GLD", "DBMF", "SPLV", "USMV", "QUAL", "VIG", "DBC", "TIP", "VXUS", "IEF"]
     }
 
     selected_category = st.sidebar.selectbox("Category", list(categories.keys()))
     available_tickers = categories[selected_category]
 
-    # Initialize session state for custom tickers if not exists
+    # Initialize session state
     if 'custom_tickers_list' not in st.session_state:
         st.session_state.custom_tickers_list = []
     
-    # Initialize session state for selected tickers in market overview
     if 'market_selected_tickers' not in st.session_state:
         st.session_state.market_selected_tickers = None
     
-    # Track category changes to reset defaults
     if 'last_market_category' not in st.session_state:
         st.session_state.last_market_category = selected_category
 
-    # Combine predefined tickers with any previously added custom tickers
+    # Combine all available tickers
     all_available_tickers = available_tickers + [t for t in st.session_state.custom_tickers_list if t not in available_tickers]
 
-    # Set default based on category (only when category changes or first load)
+    # Set default based on category
     if st.session_state.last_market_category != selected_category or st.session_state.market_selected_tickers is None:
         if selected_category == "Stocks":
             default_tickers = ["AAPL", "GOOGL", "MSFT", "AMZN"]
@@ -2655,56 +2682,44 @@ if page == "Portfolio Overview":
             default_tickers = ["TLT", "IEF", "AGG"]
         elif selected_category == "Volatility":
             default_tickers = ["^VIX"]
+        elif selected_category == "Portfolio ETFs":
+            default_tickers = ["SPMO", "SCHD", "TLT", "GLD", "DBMF"]
         else:
             default_tickers = available_tickers[:3]
         
-        # Filter defaults to only include available ones
         default_tickers = [t for t in default_tickers if t in all_available_tickers]
         st.session_state.market_selected_tickers = default_tickers
         st.session_state.last_market_category = selected_category
 
-    # Quick add custom tickers FIRST - so they appear immediately
-    st.sidebar.markdown("**➕ Add Custom Tickers**")
+    # UNIFIED TICKER INPUT: type any ticker and press Enter to add it instantly
     custom_ticker_input = st.sidebar.text_input(
-        "Enter ticker(s)",
-        placeholder="e.g., NFLX, DIS, UBER",
-        help="Enter one or multiple tickers separated by commas, spaces, or semicolons. Press Enter to add.",
+        "➕ Add ticker(s)",
+        placeholder="Type ticker and press Enter (e.g. NFLX, DIS)",
+        help="Type any ticker symbol and press Enter. It will be added to the selection automatically. Separate multiple tickers with commas.",
         key="custom_ticker_input"
     )
 
-    # Process new tickers BEFORE rendering the multiselect
     if custom_ticker_input:
-        # Parse multiple tickers from input (handle commas, spaces, semicolons)
         import re
         new_tickers = re.split(r'[,;\s]+', custom_ticker_input.strip())
         new_tickers = [t.upper().strip() for t in new_tickers if t.strip()]
     
         if new_tickers:
-            added_tickers = []
             for ticker in new_tickers:
-                # Add to custom tickers list (persistent across category changes)
                 if ticker not in st.session_state.custom_tickers_list:
                     st.session_state.custom_tickers_list.append(ticker)
-                    # Also add to all_available_tickers for this render
                     if ticker not in all_available_tickers:
                         all_available_tickers.append(ticker)
-                
-                # Add to selected tickers
                 if ticker not in st.session_state.market_selected_tickers:
                     st.session_state.market_selected_tickers.append(ticker)
-                    added_tickers.append(ticker)
-            
-            if added_tickers:
-                st.sidebar.success(f"✅ Added: {', '.join(added_tickers)}")
-                # Clear the input and rerun to show updated selection
-                st.rerun()
+            st.rerun()
 
-    # Now render the multiselect with the current selection
+    # Multiselect shows all tickers (predefined + custom) with current selection
     selected_tickers = st.sidebar.multiselect(
-        "Tickers",
+        "Selected tickers",
         options=all_available_tickers,
         default=st.session_state.market_selected_tickers,
-        help="Select from list or add custom tickers above",
+        help="Select from list or type a new ticker above to add it",
         key="market_ticker_multiselect"
     )
     
@@ -4404,17 +4419,17 @@ elif page == "Portfolio Tracker":
     # Always show "Add New Client" first (so you can create first client)
     with st.sidebar.expander("➕ Add New Client"):
         new_client_name = st.text_input("Client Name", key="new_client_name")
-        new_client_id = st.text_input("Client ID", value=new_client_name.lower().replace(' ', '_') if new_client_name else "", key="new_client_id")
+        new_client_id = new_client_name.lower().replace(' ', '_').replace('-', '_') if new_client_name else ""
         
         if st.button("Create Client", key="create_client_btn"):
             if new_client_name and new_client_id:
-                if create_new_client(new_client_id, new_client_name, 0):  # No initial capital needed
+                if create_new_client(new_client_id, new_client_name, 0):
                     st.success(f"✅ Created client: {new_client_name}")
                     st.rerun()
                 else:
                     st.error("❌ Failed to create client")
             else:
-                st.warning("Please enter client name and ID")
+                st.warning("Please enter a client name")
     
     # Mode selection
     selected_client_id = None
@@ -7451,7 +7466,7 @@ elif page == "Portfolio Tracker":
 
                             report_data = {
                                 'start_date': investment_datetime.strftime('%B %d, %Y'),
-                                'end_date': datetime.now().strftime('%B %d, %Y'),
+                                'end_date': (datetime.now() - timedelta(days=1)).strftime('%B %d, %Y'),
                                 'current_value': current_value,
                                 'total_deposits': total_deposits,
                                 'total_invested': total_invested,
