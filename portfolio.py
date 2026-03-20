@@ -365,12 +365,12 @@ GEOGRAPHIC_MAPPING = {
     
     # Default to US for bonds, commodities
     'TLT': 'United States', 'IEF': 'United States', 'AGG': 'United States',
-    'BND': 'United States', 'GLD': 'Global', 'SLV': 'Global',
+    'BND': 'United States', 'GLD': 'United States', 'SLV': 'United States',
     
     # Portfolio ETFs
     'SPMO': 'United States', 'MTUM': 'United States',
     'SCHD': 'United States', 'VIG': 'United States',
-    'DBMF': 'Global', 'CTA': 'Global', 'KMLM': 'Global',
+    'DBMF': 'United States', 'CTA': 'United States', 'KMLM': 'United States',
     'SPLV': 'United States', 'USMV': 'United States',
     'QUAL': 'United States', 'DBC': 'Global',
     'TIP': 'United States', 'VXUS': 'International',
@@ -379,7 +379,7 @@ GEOGRAPHIC_MAPPING = {
     'IUMO.L': 'United States', 'IUMF.L': 'United States',
     'FUSA.L': 'United States',
     'DTLA.L': 'United States', 'IDTL.L': 'United States',
-    'IGLN.L': 'Global',
+    'IGLN.L': 'United States',
 }
 
 STRESS_SCENARIOS = {
