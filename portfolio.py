@@ -1186,6 +1186,8 @@ def generate_pdf_report(portfolio_data, output_path):
         profit = current_value - total_deposits
         summary_data.append(['Total Profit/Loss', f"${profit:+,.0f}", '', ''])
         
+        from reportlab.platypus import KeepTogether
+        
         summary_table = Table(summary_data, colWidths=[1.9*inch, 1.5*inch, 1.9*inch, 1.5*inch])
         summary_table.setStyle(TableStyle([
             ('BACKGROUND', (0, 0), (-1, 0), pdf_colors.HexColor(DEEP_BLUE)),
@@ -1208,89 +1210,77 @@ def generate_pdf_report(portfolio_data, output_path):
             ('RIGHTPADDING', (0, 0), (-1, -1), 10),
         ]))
         story.append(summary_table)
-        story.append(Spacer(1, 0.2*inch))
+        story.append(Spacer(1, 0.15*inch))
         
         # =====================================================================
-        # PORTFOLIO VALUE CHART (with benchmark if available) - LOG SCALE
+        # PORTFOLIO GROWTH + DRAWDOWN (combined in one figure to avoid orphans)
         # =====================================================================
         if CHARTS_AVAILABLE and 'portfolio_value_series' in portfolio_data and portfolio_data['portfolio_value_series'] is not None:
             try:
-                story.append(Paragraph("Portfolio Growth (Log Scale)", heading_style))
-                story.append(Spacer(1, 0.06*inch))
-                
                 pv = portfolio_data['portfolio_value_series']
                 bv = portfolio_data.get('benchmark_value_series', None)
                 
-                fig, ax = plt.subplots(figsize=(8, 3.2))
+                # Combined figure: growth on top, drawdown on bottom
+                fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(8, 4.8), height_ratios=[3, 1.5], gridspec_kw={'hspace': 0.35})
                 
-                ax.plot(pv.index, pv.values, color=DEEP_BLUE, linewidth=1.5, label='Portfolio', zorder=3)
+                # --- TOP: Portfolio Growth (Log Scale) ---
+                ax1.plot(pv.index, pv.values, color=DEEP_BLUE, linewidth=1.5, label='Portfolio', zorder=3)
                 
                 if bv is not None and len(bv) > 0:
-                    ax.plot(bv.index, bv.values, color='#aaaaaa', linewidth=1.2, linestyle='--', label='Benchmark', zorder=2)
-                    ax.legend(loc='upper left', fontsize=8, framealpha=0.9)
+                    ax1.plot(bv.index, bv.values, color='#aaaaaa', linewidth=1.2, linestyle='--', label='Benchmark', zorder=2)
+                    ax1.legend(loc='upper left', fontsize=7, framealpha=0.9)
                 
-                ax.set_yscale('log')
-                ax.yaxis.set_major_formatter(mticker.FuncFormatter(lambda x, _: f'${x:,.0f}'))
-                ax.xaxis.set_major_formatter(mdates.DateFormatter('%b %Y'))
-                ax.xaxis.set_major_locator(mdates.MonthLocator(interval=6))
-                plt.xticks(rotation=45, fontsize=7)
-                plt.yticks(fontsize=7)
-                ax.set_xlabel('')
-                ax.set_ylabel('Portfolio Value ($)', fontsize=8)
-                ax.grid(True, alpha=0.3, linewidth=0.5)
-                ax.spines['top'].set_visible(False)
-                ax.spines['right'].set_visible(False)
+                ax1.set_yscale('log')
+                # Force clean dollar formatting (no scientific notation)
+                ax1.yaxis.set_major_formatter(mticker.FuncFormatter(lambda x, _: f'${x:,.0f}'))
+                ax1.yaxis.set_minor_formatter(mticker.NullFormatter())
+                ax1.set_yticks([t for t in [50000, 75000, 100000, 150000, 200000, 300000, 500000, 750000, 1000000] if t >= pv.min() * 0.8 and t <= pv.max() * 1.2])
+                ax1.xaxis.set_major_formatter(mdates.DateFormatter('%b %Y'))
+                ax1.xaxis.set_major_locator(mdates.MonthLocator(interval=6))
+                ax1.tick_params(axis='x', rotation=45, labelsize=6)
+                ax1.tick_params(axis='y', labelsize=7)
+                ax1.set_ylabel('Portfolio Value', fontsize=8)
+                ax1.set_title('Portfolio Growth (Log Scale)', fontsize=10, fontweight='bold', color=DEEP_BLUE, loc='left')
+                ax1.grid(True, alpha=0.25, linewidth=0.5)
+                ax1.spines['top'].set_visible(False)
+                ax1.spines['right'].set_visible(False)
                 
-                # Add start/end annotations
+                # Start/end annotations
                 start_val = pv.iloc[0]
                 end_val = pv.iloc[-1]
-                ax.annotate(f'${start_val:,.0f}', xy=(pv.index[0], start_val), fontsize=7, color='#666666')
-                ax.annotate(f'${end_val:,.0f}', xy=(pv.index[-1], end_val), fontsize=7, color=DEEP_BLUE, fontweight='bold')
+                ax1.annotate(f'${start_val:,.0f}', xy=(pv.index[0], start_val), fontsize=6, color='#888888')
+                ax1.annotate(f'${end_val:,.0f}', xy=(pv.index[-1], end_val), fontsize=7, color=DEEP_BLUE, fontweight='bold')
                 
-                fig.tight_layout()
-                story.append(fig_to_image(fig, 6.8, 2.8))
-                story.append(Spacer(1, 0.1*inch))
-            except Exception as e:
-                print(f"Portfolio value chart error: {e}")
-        
-        # =====================================================================
-        # DRAWDOWN CHART
-        # =====================================================================
-        if CHARTS_AVAILABLE and 'portfolio_value_series' in portfolio_data and portfolio_data['portfolio_value_series'] is not None:
-            try:
-                story.append(Paragraph("Drawdown Analysis", subheading_style))
-                story.append(Spacer(1, 0.04*inch))
-                
-                pv = portfolio_data['portfolio_value_series']
+                # --- BOTTOM: Drawdown ---
                 running_max = pv.cummax()
                 drawdown = ((pv - running_max) / running_max) * 100
                 
-                fig, ax = plt.subplots(figsize=(8, 2.0))
-                ax.fill_between(drawdown.index, drawdown.values, 0, color=RED, alpha=0.25, zorder=2)
-                ax.plot(drawdown.index, drawdown.values, color=RED, linewidth=0.8, zorder=3)
-                ax.axhline(y=0, color='#333333', linewidth=0.5)
+                ax2.fill_between(drawdown.index, drawdown.values, 0, color=RED, alpha=0.2, zorder=2)
+                ax2.plot(drawdown.index, drawdown.values, color=RED, linewidth=0.7, zorder=3)
+                ax2.axhline(y=0, color='#333333', linewidth=0.5)
                 
-                # Mark max drawdown
                 min_dd_idx = drawdown.idxmin()
                 min_dd_val = drawdown.min()
-                ax.annotate(f'Max: {min_dd_val:.1f}%', xy=(min_dd_idx, min_dd_val),
+                ax2.annotate(f'Max: {min_dd_val:.1f}%', xy=(min_dd_idx, min_dd_val),
                            fontsize=7, color=RED, fontweight='bold',
-                           xytext=(10, -15), textcoords='offset points',
-                           arrowprops=dict(arrowstyle='->', color=RED, lw=0.8))
+                           xytext=(15, -10), textcoords='offset points',
+                           arrowprops=dict(arrowstyle='->', color=RED, lw=0.7))
                 
-                ax.yaxis.set_major_formatter(mticker.FuncFormatter(lambda x, _: f'{x:.0f}%'))
-                ax.xaxis.set_major_formatter(mdates.DateFormatter('%b %Y'))
-                ax.xaxis.set_major_locator(mdates.MonthLocator(interval=6))
-                plt.xticks(rotation=45, fontsize=7)
-                plt.yticks(fontsize=7)
-                ax.set_ylabel('Drawdown', fontsize=8)
-                ax.grid(True, alpha=0.2, linewidth=0.5)
-                ax.spines['top'].set_visible(False)
-                ax.spines['right'].set_visible(False)
+                ax2.yaxis.set_major_formatter(mticker.FuncFormatter(lambda x, _: f'{x:.0f}%'))
+                ax2.xaxis.set_major_formatter(mdates.DateFormatter('%b %Y'))
+                ax2.xaxis.set_major_locator(mdates.MonthLocator(interval=6))
+                ax2.tick_params(axis='x', rotation=45, labelsize=6)
+                ax2.tick_params(axis='y', labelsize=7)
+                ax2.set_ylabel('Drawdown', fontsize=8)
+                ax2.set_title('Drawdown Analysis', fontsize=10, fontweight='bold', color=RED, loc='left')
+                ax2.grid(True, alpha=0.2, linewidth=0.5)
+                ax2.spines['top'].set_visible(False)
+                ax2.spines['right'].set_visible(False)
+                
                 fig.tight_layout()
-                story.append(fig_to_image(fig, 6.8, 1.8))
+                story.append(fig_to_image(fig, 6.8, 4.2))
             except Exception as e:
-                print(f"Drawdown chart error: {e}")
+                print(f"Portfolio/drawdown chart error: {e}")
         
         story.append(PageBreak())
         
@@ -1299,13 +1289,10 @@ def generate_pdf_report(portfolio_data, output_path):
         # =====================================================================
         if CHARTS_AVAILABLE and 'holdings' in portfolio_data and portfolio_data['holdings'] is not None and not portfolio_data['holdings'].empty:
             try:
-                story.append(Paragraph("Portfolio Composition", heading_style))
-                story.append(Spacer(1, 0.06*inch))
-                
                 holdings_df = portfolio_data['holdings']
                 sorted_h = holdings_df.sort_values('Weight', ascending=True)
                 
-                fig, ax = plt.subplots(figsize=(8, max(2.0, len(holdings_df) * 0.4)))
+                fig, ax = plt.subplots(figsize=(8, max(1.8, len(holdings_df) * 0.4)))
                 
                 colors_list = [ACCENT_BLUE if w > 0 else RED for w in sorted_h['Weight']]
                 bars = ax.barh(sorted_h['Ticker'], sorted_h['Weight'], color=colors_list, edgecolor=DEEP_BLUE, linewidth=0.5, height=0.6)
@@ -1322,8 +1309,14 @@ def generate_pdf_report(portfolio_data, output_path):
                 ax.spines['top'].set_visible(False)
                 ax.spines['right'].set_visible(False)
                 fig.tight_layout()
-                story.append(fig_to_image(fig, 6.8, max(1.8, len(holdings_df) * 0.35)))
-                story.append(Spacer(1, 0.12*inch))
+                
+                composition_items = [
+                    Paragraph("Portfolio Composition", heading_style),
+                    Spacer(1, 0.04*inch),
+                    fig_to_image(fig, 6.8, max(1.6, len(holdings_df) * 0.32)),
+                    Spacer(1, 0.08*inch),
+                ]
+                story.append(KeepTogether(composition_items))
             except Exception as e:
                 print(f"Allocation chart error: {e}")
         
@@ -1331,9 +1324,6 @@ def generate_pdf_report(portfolio_data, output_path):
         # CURRENT HOLDINGS TABLE
         # =====================================================================
         if 'holdings' in portfolio_data and portfolio_data['holdings'] is not None and not portfolio_data['holdings'].empty:
-            story.append(Paragraph("Current Holdings", heading_style))
-            story.append(Spacer(1, 0.06*inch))
-            
             holdings_data_rows = [['Ticker', 'Shares', 'Avg Cost', 'Price', 'Value', 'Gain/Loss', 'Return']]
             
             for _, row in portfolio_data['holdings'].iterrows():
@@ -1365,22 +1355,23 @@ def generate_pdf_report(portfolio_data, output_path):
                 ('LEFTPADDING', (0, 0), (-1, -1), 5),
                 ('RIGHTPADDING', (0, 0), (-1, -1), 5),
             ]))
-            story.append(ht)
-            story.append(Spacer(1, 0.15*inch))
+            story.append(KeepTogether([
+                Paragraph("Current Holdings", heading_style),
+                Spacer(1, 0.04*inch),
+                ht,
+                Spacer(1, 0.1*inch),
+            ]))
         
         # =====================================================================
         # PERFORMANCE ATTRIBUTION CHART
         # =====================================================================
         if CHARTS_AVAILABLE and 'attribution_data' in portfolio_data and portfolio_data['attribution_data']:
             try:
-                story.append(Paragraph("Performance Attribution", heading_style))
-                story.append(Spacer(1, 0.06*inch))
-                
                 sorted_attr = sorted(portfolio_data['attribution_data'], key=lambda x: x['Return (%)'], reverse=True)
                 assets = [item['Asset'] for item in sorted_attr]
                 returns_pct = [item['Return (%)'] for item in sorted_attr]
                 
-                fig, ax = plt.subplots(figsize=(8, 2.5))
+                fig, ax = plt.subplots(figsize=(8, 2.2))
                 bar_colors = [GREEN if r >= 0 else RED for r in returns_pct]
                 bars = ax.bar(assets, returns_pct, color=bar_colors, edgecolor=DEEP_BLUE, linewidth=0.5, width=0.6)
                 
@@ -1398,8 +1389,13 @@ def generate_pdf_report(portfolio_data, output_path):
                 ax.spines['top'].set_visible(False)
                 ax.spines['right'].set_visible(False)
                 fig.tight_layout()
-                story.append(fig_to_image(fig, 6.8, 2.3))
-                story.append(Spacer(1, 0.1*inch))
+                
+                story.append(KeepTogether([
+                    Paragraph("Performance Attribution", heading_style),
+                    Spacer(1, 0.04*inch),
+                    fig_to_image(fig, 6.8, 2.0),
+                    Spacer(1, 0.06*inch),
+                ]))
             except Exception as e:
                 print(f"Attribution chart error: {e}")
         
@@ -1407,9 +1403,6 @@ def generate_pdf_report(portfolio_data, output_path):
         # DETAILED ATTRIBUTION TABLE
         # =====================================================================
         if 'attribution_data' in portfolio_data and portfolio_data['attribution_data']:
-            story.append(Paragraph("Detailed Attribution", subheading_style))
-            story.append(Spacer(1, 0.04*inch))
-            
             attr_rows = [['Asset', 'Invested', 'Current Value', 'Gain/Loss', 'Return %']]
             for item in portfolio_data['attribution_data']:
                 attr_rows.append([
@@ -1434,9 +1427,12 @@ def generate_pdf_report(portfolio_data, output_path):
                 ('TOPPADDING', (0, 0), (-1, -1), 5),
                 ('BOTTOMPADDING', (0, 0), (-1, -1), 5),
             ]))
-            story.append(at)
-        
-        story.append(PageBreak())
+            story.append(KeepTogether([
+                Paragraph("Detailed Attribution", subheading_style),
+                Spacer(1, 0.04*inch),
+                at,
+                Spacer(1, 0.1*inch),
+            ]))
         
         # =====================================================================
         # SECTOR & GEOGRAPHIC ALLOCATION
