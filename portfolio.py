@@ -1595,17 +1595,18 @@ def fetch_data(tickers, start, end, _cache_key=None):
     data = {}
     failed = []
 
-    # yfinance end is exclusive. Adding 1 day ensures the last fully-closed
-    # trading day is always included — critical for European tickers when the
-    # market is already closed but end_date == today.
-    end_inclusive = end + timedelta(days=1)
+    # yfinance end is exclusive. end+1 ensures the last closed trading day is
+    # always included — without this, EU tickers return empty when their market
+    # closes before US opens and end_date == today.
+    end_fetch = end + timedelta(days=1)
 
     for ticker in tickers:
         try:
-            df = yf.download(ticker, start=start, end=end_inclusive, progress=False)
-            # Flatten MultiIndex columns introduced in yfinance 0.2.x
+            df = yf.download(ticker, start=start, end=end_fetch, progress=False)
+            # Flatten MultiIndex columns (yfinance 0.2.x returns ('Close','AAPL') etc.)
             if isinstance(df.columns, pd.MultiIndex):
                 df.columns = df.columns.get_level_values(0)
+            # Drop rows where Close is NaN (today's unfinished/closed session)
             if not df.empty and 'Close' in df.columns:
                 df = df.dropna(subset=['Close'])
             if not df.empty:
@@ -1637,7 +1638,6 @@ def calculate_metrics(df):
         return None, None, None
 
     close = df['Close']
-    # Flatten MultiIndex if still present
     if isinstance(close, pd.DataFrame):
         close = close.iloc[:, 0]
     close = close.dropna()
@@ -2991,51 +2991,48 @@ if page == "Market Overview":
         result = {}
         try:
             if period_days == 0:
-                # Fetch 10 days of daily data to ensure we always have 2+ non-NaN closes
-                # (today may be NaN if market is not yet open or is closed)
+                # Use 10d so dropna() always yields >=2 real closes even when
+                # today's row is NaN (EU market closed, US not yet open, etc.)
                 df_daily = yf.download(tickers_list, period="10d", progress=False, group_by='ticker')
                 df_intraday = yf.download(tickers_list, period="1d", interval="5m", progress=False, group_by='ticker')
 
                 for tkr in tickers_list:
                     try:
-                        # --- Extract daily close series ---
                         if len(tickers_list) == 1:
+                            # Handle both flat and MultiIndex column formats
                             if isinstance(df_daily.columns, pd.MultiIndex):
-                                daily_close = df_daily['Close'].iloc[:, 0] if 'Close' in df_daily.columns.get_level_values(0) else None
+                                lvl0 = df_daily.columns.get_level_values(0)
+                                daily_close = df_daily['Close'].iloc[:, 0] if 'Close' in lvl0 else None
                             else:
                                 daily_close = df_daily['Close'] if 'Close' in df_daily.columns else None
+                            if isinstance(df_intraday.columns, pd.MultiIndex):
+                                lvl0i = df_intraday.columns.get_level_values(0)
+                                intra_close = df_intraday['Close'].iloc[:, 0] if not df_intraday.empty and 'Close' in lvl0i else None
+                            else:
+                                intra_close = df_intraday['Close'] if not df_intraday.empty and 'Close' in df_intraday.columns else None
                         else:
                             daily_close = df_daily[tkr]['Close'] if tkr in df_daily.columns.get_level_values(0) else None
+                            intra_close = df_intraday[tkr]['Close'] if not df_intraday.empty and tkr in df_intraday.columns.get_level_values(0) else None
 
                         if daily_close is not None:
                             if isinstance(daily_close, pd.DataFrame):
                                 daily_close = daily_close.iloc[:, 0]
-                            # Drop NaN — today's row is NaN when market is closed
                             daily_close = daily_close.dropna()
-
-                        # --- Extract intraday close series ---
-                        if len(tickers_list) == 1:
-                            if isinstance(df_intraday.columns, pd.MultiIndex):
-                                intra_close = df_intraday['Close'].iloc[:, 0] if not df_intraday.empty and 'Close' in df_intraday.columns.get_level_values(0) else None
-                            else:
-                                intra_close = df_intraday['Close'] if not df_intraday.empty and 'Close' in df_intraday.columns else None
-                        else:
-                            intra_close = df_intraday[tkr]['Close'] if not df_intraday.empty and tkr in df_intraday.columns.get_level_values(0) else None
 
                         if intra_close is not None:
                             if isinstance(intra_close, pd.DataFrame):
                                 intra_close = intra_close.iloc[:, 0]
                             intra_close = intra_close.dropna()
 
-                        # --- Build result series ---
                         if daily_close is not None and len(daily_close) >= 2 and intra_close is not None and len(intra_close) >= 1:
-                            # Market is OPEN: prepend previous daily close so % change is vs yesterday
-                            prev_close = daily_close.iloc[-1]
+                            # Market OPEN: prepend yesterday's close (iloc[-2]) so %chg is vs prev day
+                            prev_close = daily_close.iloc[-2]
                             prev_series = pd.Series([prev_close], index=[intra_close.index[0] - pd.Timedelta(minutes=5)])
-                            result[tkr] = pd.concat([prev_series, intra_close])
+                            combined = pd.concat([prev_series, intra_close])
+                            result[tkr] = combined
                         elif daily_close is not None and len(daily_close) >= 2:
-                            # Market is CLOSED (e.g. CAC 40 after 17:30):
-                            # show last close vs previous close so the 1D % change is meaningful
+                            # Market CLOSED (e.g. CAC 40 after 17:30):
+                            # show last two real closes so %chg = today vs yesterday
                             result[tkr] = daily_close.iloc[-2:]
                     except Exception:
                         continue
