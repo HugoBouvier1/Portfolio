@@ -1594,28 +1594,24 @@ def fetch_data(tickers, start, end, _cache_key=None):
     """
     data = {}
     failed = []
-
-    # end+1 day: yfinance end is exclusive, and EU tickers return empty when
-    # their market closes before US opens and end_date == today.
-    end_fetch = end + timedelta(days=1)
-
+    
     for ticker in tickers:
         try:
-            df = yf.download(ticker, start=start, end=end_fetch, progress=False)
-            if isinstance(df.columns, pd.MultiIndex):
-                df.columns = df.columns.get_level_values(0)
-            if not df.empty and 'Close' in df.columns:
-                df = df.dropna(subset=['Close'])
+            df = yf.download(ticker, start=start, end=end, progress=False)
             if not df.empty:
+                # ✅ FIX: Flatten MultiIndex columns introduced in yfinance 0.2.x
+                # e.g. ('Close', 'AAPL') → 'Close'
+                if isinstance(df.columns, pd.MultiIndex):
+                    df.columns = df.columns.get_level_values(0)
                 data[ticker] = df
             else:
                 failed.append(ticker)
         except Exception as e:
             failed.append(ticker)
-
+    
     if failed:
         st.sidebar.warning(f"⚠️ Could not fetch: {', '.join(failed)}")
-
+    
     return data
 
 # =============================================================================
@@ -1631,24 +1627,14 @@ def calculate_metrics(df):
     Returns:
         Tuple of (current_price, percent_change, annualized_volatility)
     """
-    if df.empty or 'Close' not in df.columns:
+    if df.empty:
         return None, None, None
-
-    close = df['Close']
-    if isinstance(close, pd.DataFrame):
-        close = close.iloc[:, 0]
-    close = close.dropna()
-
-    if len(close) < 2:
-        return None, None, None
-
-    current_price = float(close.iloc[-1])
-    prev_price = float(close.iloc[0])
-    if prev_price == 0:
-        return None, None, None
+    
+    current_price = float(df['Close'].iloc[-1])
+    prev_price = float(df['Close'].iloc[0])
     change = float(((current_price - prev_price) / prev_price) * 100)
-    volatility = float(close.pct_change().std() * np.sqrt(TRADING_DAYS_PER_YEAR) * 100)
-
+    volatility = float(df['Close'].pct_change().std() * np.sqrt(TRADING_DAYS_PER_YEAR) * 100)
+    
     return current_price, change, volatility
 
 def normalize_prices(data):
@@ -2988,53 +2974,34 @@ if page == "Market Overview":
         result = {}
         try:
             if period_days == 0:
-                now_utc = pd.Timestamp.utcnow()
+                df_daily = yf.download(tickers_list, period="5d", progress=False, group_by='ticker')
+                df_intraday = yf.download(tickers_list, period="1d", interval="5m", progress=False, group_by='ticker')
+                
                 for tkr in tickers_list:
                     try:
-                        # --- fetch intraday (individual ticker for clean columns) ---
-                        df_intra = yf.download(tkr, period="1d", interval="5m", progress=False)
-                        if isinstance(df_intra.columns, pd.MultiIndex):
-                            df_intra.columns = df_intra.columns.get_level_values(0)
-
-                        intra_close = None
-                        if not df_intra.empty and 'Close' in df_intra.columns:
-                            intra_close = df_intra['Close'].dropna()
-
-                        # --- fetch daily (individual ticker) ---
-                        df_day = yf.download(tkr, period="5d", progress=False)
-                        if isinstance(df_day.columns, pd.MultiIndex):
-                            df_day.columns = df_day.columns.get_level_values(0)
-
-                        daily_close = None
-                        if not df_day.empty and 'Close' in df_day.columns:
-                            daily_close = df_day['Close'].dropna()
-
-                        if daily_close is None or len(daily_close) < 2:
-                            continue
-
-                        # --- detect if market is currently open ---
-                        # A market is open only if its last intraday bar is fresh (≤60 min old)
-                        market_open = False
-                        if intra_close is not None and len(intra_close) >= 1:
-                            last_bar = intra_close.index[-1]
-                            if last_bar.tzinfo is None:
-                                last_bar = last_bar.tz_localize('UTC')
-                            else:
-                                last_bar = last_bar.tz_convert('UTC')
-                            market_open = (now_utc - last_bar) <= pd.Timedelta(minutes=60)
-
-                        if market_open:
-                            # Market OPEN: full intraday sparkline anchored to prev daily close
-                            # daily_close.iloc[-1] = yesterday (today not finalised yet in daily)
-                            prev_close = daily_close.iloc[-1]
-                            prev_ts = intra_close.index[0] - pd.Timedelta(minutes=5)
-                            result[tkr] = pd.concat([
-                                pd.Series([prev_close], index=[prev_ts]),
-                                intra_close
-                            ])
+                        if len(tickers_list) == 1:
+                            daily_close = df_daily['Close']
+                            intra_close = df_intraday['Close'] if not df_intraday.empty else None
                         else:
-                            # Market CLOSED: show today's close vs yesterday's close
-                            # daily_close after dropna: [..., yesterday, today]
+                            daily_close = df_daily[tkr]['Close'] if tkr in df_daily.columns.get_level_values(0) else None
+                            intra_close = df_intraday[tkr]['Close'] if not df_intraday.empty and tkr in df_intraday.columns.get_level_values(0) else None
+                        
+                        if daily_close is not None:
+                            if isinstance(daily_close, pd.DataFrame):
+                                daily_close = daily_close.iloc[:, 0]
+                            daily_close = daily_close.dropna()
+                        
+                        if intra_close is not None:
+                            if isinstance(intra_close, pd.DataFrame):
+                                intra_close = intra_close.iloc[:, 0]
+                            intra_close = intra_close.dropna()
+                        
+                        if daily_close is not None and len(daily_close) >= 2 and intra_close is not None and len(intra_close) >= 1:
+                            prev_close = daily_close.iloc[-2]
+                            prev_series = pd.Series([prev_close], index=[intra_close.index[0] - pd.Timedelta(minutes=5)])
+                            combined = pd.concat([prev_series, intra_close])
+                            result[tkr] = combined
+                        elif daily_close is not None and len(daily_close) >= 2:
                             result[tkr] = daily_close.iloc[-2:]
                     except Exception:
                         continue
