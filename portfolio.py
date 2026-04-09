@@ -1599,7 +1599,10 @@ def fetch_data(tickers, start, end, _cache_key=None):
         try:
             df = yf.download(ticker, start=start, end=end, progress=False)
             if not df.empty:
-                # Store the raw DataFrame - handle MultiIndex in extraction
+                # ✅ FIX: Flatten MultiIndex columns introduced in yfinance 0.2.x
+                # e.g. ('Close', 'AAPL') → 'Close'
+                if isinstance(df.columns, pd.MultiIndex):
+                    df.columns = df.columns.get_level_values(0)
                 data[ticker] = df
             else:
                 failed.append(ticker)
